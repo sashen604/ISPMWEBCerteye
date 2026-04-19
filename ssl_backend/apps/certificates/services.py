@@ -14,6 +14,8 @@ from django.db import transaction
 from .models import Certificate
 from .fetchers import SSLCertificateFetcher, CertificateFetchError
 from .parsers import CertificateParser, CertificateParsingError
+from apps.risk_engine.services import RiskScoringEngine
+from apps.audit_logs.services import AuditLoggingService
 
 
 class CertificateFetchService:
@@ -42,7 +44,7 @@ class CertificateFetchService:
         self.fetcher = SSLCertificateFetcher(timeout=timeout)
         self.timeout = timeout
     
-    def scan_and_store(self, domain: str, update_if_exists: bool = True) -> Dict[str, Any]:
+    def scan_and_store(self, domain: str, update_if_exists: bool = True, user=None, request=None) -> Dict[str, Any]:
         """
         Scan a domain for SSL certificate and store in database.
         
@@ -56,6 +58,8 @@ class CertificateFetchService:
         Args:
             domain (str): Domain to scan (e.g., 'google.com')
             update_if_exists (bool): Update existing certificate if found (default: True)
+            user: User object for audit logging
+            request: HTTP request object for IP extraction
             
         Returns:
             dict: Result dictionary with:
@@ -82,12 +86,57 @@ class CertificateFetchService:
             # Step 3: Calculate risk score
             cert_data['risk_level'], cert_data['risk_score'] = self._calculate_risk(cert_data)
             
-            # Step 4: Store in database with transaction
+            # Step 4: Get risk reasoning for audit trail
+            cert_data['risk_reasoning'] = RiskScoringEngine.get_risk_reasoning(
+                valid_to=cert_data.get('valid_to'),
+                key_length=cert_data.get('key_length', 2048),
+                is_self_signed=cert_data.get('certificate_type') == 'self-signed',
+                algorithm=cert_data.get('signature_algorithm', '')
+            )
+            
+            # Step 5: Store in database with transaction
             with transaction.atomic():
                 certificate, created = self._store_or_update_certificate(
                     cert_data,
                     update_if_exists=update_if_exists
                 )
+            
+            # Step 6: Log certificate action
+            try:
+                if created:
+                    AuditLoggingService.log_certificate_action(
+                        user=user,
+                        action='create',
+                        certificate_id=certificate.id,
+                        certificate_name=certificate.subject or domain,
+                        domain=domain,
+                        new_values={
+                            'issuer': certificate.issuer,
+                            'valid_from': str(certificate.valid_from),
+                            'valid_to': str(certificate.valid_to),
+                            'key_length': certificate.key_length,
+                            'risk_level': certificate.risk_level,
+                        },
+                        request=request,
+                    )
+                else:
+                    AuditLoggingService.log_certificate_action(
+                        user=user,
+                        action='update',
+                        certificate_id=certificate.id,
+                        certificate_name=certificate.subject or domain,
+                        domain=domain,
+                        new_values={
+                            'issuer': certificate.issuer,
+                            'valid_to': str(certificate.valid_to),
+                            'risk_level': certificate.risk_level,
+                        },
+                        request=request,
+                    )
+            except Exception as log_error:
+                # Log error if audit logging fails but don't fail the operation
+                import sys
+                print(f"ERROR: Audit logging failed: {log_error}", file=sys.stderr)
             
             status = 'created' if created else 'updated'
             message = f"Certificate for {domain} {'created' if created else 'updated'} successfully"
@@ -213,63 +262,38 @@ class CertificateFetchService:
     
     def _calculate_risk(self, cert_data: Dict[str, Any]) -> tuple:
         """
-        Calculate risk level and risk score for certificate.
-        
-        Risk Assessment Logic:
-        - Risk Score (0-100): Based on days until expiration and key length
-          - Days < 7: +50
-          - Days < 30: +25
-          - Days < 90: +10
-          - Key length < 2048: +30
-          - Key length < 4096: +10
-          - Self-signed: +20
-        
-        - Risk Level: Categorical classification
-          - score > 70: 'critical'
-          - score > 50: 'high'
-          - score > 25: 'medium'
-          - else: 'low'
+        Calculate risk level and risk score using unified risk engine.
         
         Args:
-            cert_data (dict): Certificate metadata
+            cert_data (dict): Certificate metadata including:
+                - valid_to: Certificate expiration datetime
+                - key_length: RSA key length in bits
+                - certificate_type: Type of certificate ('self-signed', etc)
+                - signature_algorithm: Signature algorithm
             
         Returns:
             tuple: (risk_level, risk_score)
+                - risk_level: 'CRITICAL', 'HIGH', 'MEDIUM', or 'LOW' (uppercase)
+                - risk_score: 0-100 integer
         """
-        risk_score = 0
-        
-        # Days remaining scoring
-        days_remaining = cert_data.get('days_remaining', 0)
-        if days_remaining < 7:
-            risk_score += 50
-        elif days_remaining < 30:
-            risk_score += 25
-        elif days_remaining < 90:
-            risk_score += 10
-        
-        # Key length scoring
-        key_length = cert_data.get('key_length', 0)
-        if key_length < 2048:
-            risk_score += 30
-        elif key_length < 4096:
-            risk_score += 10
-        
-        # Certificate type scoring
+        # Extract certificate properties
+        valid_to = cert_data.get('valid_to')
+        key_length = cert_data.get('key_length', 2048)
         cert_type = cert_data.get('certificate_type', '')
-        if cert_type == 'self-signed':
-            risk_score += 20
+        algorithm = cert_data.get('signature_algorithm', '')
         
-        # Cap at 100
-        risk_score = min(100, risk_score)
+        # Determine if self-signed
+        is_self_signed = cert_type == 'self-signed'
         
-        # Determine risk level
-        if risk_score > 70:
-            risk_level = 'critical'
-        elif risk_score > 50:
-            risk_level = 'high'
-        elif risk_score > 25:
-            risk_level = 'medium'
-        else:
-            risk_level = 'low'
+        # Use unified risk scoring engine
+        risk_score = RiskScoringEngine.calculate_risk_score(
+            valid_to=valid_to,
+            key_length=key_length,
+            is_self_signed=is_self_signed,
+            algorithm=algorithm
+        )
+        
+        # Get risk level (already uppercase from engine)
+        risk_level = RiskScoringEngine.determine_risk_level(risk_score)
         
         return risk_level, risk_score

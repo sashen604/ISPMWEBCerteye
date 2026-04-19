@@ -12,6 +12,7 @@ import InternalCertificatesPage from './pages/InternalCertificatesPage.jsx'
 import InternalCertificateAlertsPage from './pages/InternalCertificateAlertsPage.jsx'
 import InternalCertificateAlertHistoryPage from './pages/InternalCertificateAlertHistoryPage.jsx'
 import SettingsPage from './pages/SettingsPage.jsx'
+import ADCSManagementPage from './pages/ADCSManagementPage.jsx'
 import { isAuthenticated } from './services/auth'
 
 // Protected route component
@@ -67,6 +68,7 @@ function App() {
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="panel" element={<AdminPanelPage />} />
         <Route path="users" element={<UserManagementPage />} />
+        <Route path="adcs" element={<ADCSManagementPage />} />
         <Route path="certificates" element={<CertificatesPage />} />
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="internal-certificates" element={<InternalCertificatesPage />} />

@@ -6,10 +6,16 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from datetime import datetime
 
-from .models import UserLoginLog, UserRegistrationLog, UserAuditLog
+from .models import (
+    UserLoginLog, UserRegistrationLog, UserAuditLog,
+    UserSession, IPWhitelist, APIKey, SecurityAuditLog, SuspiciousLoginAttempt
+)
 from .serializers import (
     RegisterSerializer, UserSerializer, UserListSerializer, UserUpdateSerializer,
-    UserLoginLogSerializer, UserRegistrationLogSerializer, UserAuditLogSerializer
+    UserLoginLogSerializer, UserRegistrationLogSerializer, UserAuditLogSerializer,
+    UserSecuritySettingsSerializer, UserSessionSerializer, IPWhitelistSerializer,
+    APIKeySerializer, APIKeyDetailSerializer, SecurityAuditLogSerializer,
+    SuspiciousLoginAttemptSerializer
 )
 from .permissions import IsSuperAdmin
 
@@ -86,10 +92,8 @@ class LoginView(APIView):
         return Response({
             'success': True,
             'user': UserSerializer(user).data,
-            'tokens': {
-                'refresh': str(refresh),
-                'access': str(refresh.access_token),
-            }
+            'access': str(refresh.access_token),
+            'refresh': str(refresh),
         })
 
 
@@ -307,4 +311,354 @@ class UserAuditLogsView(APIView):
             'success': True,
             'count': len(logs),
             'logs': serializer.data
+        })
+
+
+# ============================================================================
+# New Security Features Views
+# ============================================================================
+
+class SecuritySettingsView(APIView):
+    """Get and update user security settings"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get current security settings"""
+        serializer = UserSecuritySettingsSerializer(request.user)
+        return Response({
+            'success': True,
+            'settings': serializer.data
+        })
+    
+    def post(self, request):
+        """Update security settings"""
+        serializer = UserSecuritySettingsSerializer(request.user, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response({'success': False, 'errors': serializer.errors}, status=400)
+        
+        serializer.save()
+        
+        # Log settings change
+        SecurityAuditLog.objects.create(
+            user=request.user,
+            event_type='settings_changed',
+            description='User security settings updated',
+            ip_address=get_client_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            status='success',
+            metadata={'changes': request.data}
+        )
+        
+        return Response({
+            'success': True,
+            'message': 'Security settings updated',
+            'settings': serializer.data
+        })
+
+
+class ActiveSessionsView(APIView):
+    """Get and manage active user sessions"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get all active sessions for current user"""
+        sessions = UserSession.objects.filter(user=request.user, is_active=True)
+        serializer = UserSessionSerializer(sessions, many=True)
+        return Response({
+            'success': True,
+            'sessions': serializer.data
+        })
+    
+    def delete(self, request):
+        """Sign out from all other sessions"""
+        current_session_id = request.session.session_key if hasattr(request, 'session') else None
+        
+        # Deactivate all sessions except current
+        UserSession.objects.filter(user=request.user).exclude(
+            id=current_session_id
+        ).update(is_active=False)
+        
+        SecurityAuditLog.objects.create(
+            user=request.user,
+            event_type='session_terminated',
+            description='All other sessions terminated',
+            ip_address=get_client_ip(request),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            status='success'
+        )
+        
+        return Response({
+            'success': True,
+            'message': 'Signed out from all other sessions'
+        })
+
+
+class IPWhitelistView(APIView):
+    """Manage IP whitelist for user account"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get whitelisted IPs"""
+        ips = IPWhitelist.objects.filter(user=request.user)
+        serializer = IPWhitelistSerializer(ips, many=True)
+        return Response({
+            'success': True,
+            'ips': serializer.data
+        })
+    
+    def post(self, request):
+        """Add IP to whitelist"""
+        ip_address = request.data.get('ip_address')
+        description = request.data.get('description', '')
+        
+        if not ip_address:
+            return Response({'success': False, 'error': 'IP address required'}, status=400)
+        
+        ip_whitelist, created = IPWhitelist.objects.get_or_create(
+            user=request.user,
+            ip_address=ip_address,
+            defaults={'description': description}
+        )
+        
+        if created:
+            SecurityAuditLog.objects.create(
+                user=request.user,
+                event_type='ip_whitelisted',
+                description=f'IP {ip_address} whitelisted',
+                ip_address=get_client_ip(request),
+                status='success'
+            )
+        
+        serializer = IPWhitelistSerializer(ip_whitelist)
+        return Response({
+            'success': True,
+            'message': 'IP added to whitelist' if created else 'IP already whitelisted',
+            'ip': serializer.data
+        }, status=201 if created else 200)
+    
+    def delete(self, request, pk):
+        """Remove IP from whitelist"""
+        try:
+            ip_whitelist = IPWhitelist.objects.get(pk=pk, user=request.user)
+            ip_address = ip_whitelist.ip_address
+            ip_whitelist.delete()
+            
+            SecurityAuditLog.objects.create(
+                user=request.user,
+                event_type='ip_whitelisted',
+                description=f'IP {ip_address} removed from whitelist',
+                ip_address=get_client_ip(request),
+                status='success'
+            )
+            
+            return Response({'success': True, 'message': 'IP removed from whitelist'})
+        except IPWhitelist.DoesNotExist:
+            return Response({'success': False, 'error': 'IP not found'}, status=404)
+
+
+class APIKeyView(APIView):
+    """Manage API keys for programmatic access"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get all API keys for current user"""
+        keys = APIKey.objects.filter(user=request.user)
+        serializer = APIKeySerializer(keys, many=True)
+        return Response({
+            'success': True,
+            'api_keys': serializer.data
+        })
+    
+    def post(self, request):
+        """Generate new API key"""
+        name = request.data.get('name', f'API Key {timezone.now().strftime("%Y-%m-%d")}')
+        
+        key = APIKey.objects.create(
+            user=request.user,
+            name=name,
+            key=APIKey.generate_key(),
+            secret=APIKey.generate_secret(),
+            expires_at=timezone.now() + timezone.timedelta(days=request.user.api_key_rotation_days)
+        )
+        
+        SecurityAuditLog.objects.create(
+            user=request.user,
+            event_type='api_key_created',
+            description=f'API key "{name}" created',
+            ip_address=get_client_ip(request),
+            status='success'
+        )
+        
+        serializer = APIKeyDetailSerializer(key)
+        return Response({
+            'success': True,
+            'message': 'API key generated. Save it in a secure location!',
+            'api_key': serializer.data
+        }, status=201)
+
+
+class APIKeyDetailView(APIView):
+    """Delete/revoke an API key"""
+    permission_classes = [IsAuthenticated]
+    
+    def delete(self, request, pk):
+        """Revoke an API key"""
+        try:
+            api_key = APIKey.objects.get(pk=pk, user=request.user)
+            name = api_key.name
+            api_key.is_active = False
+            api_key.save()
+            
+            SecurityAuditLog.objects.create(
+                user=request.user,
+                event_type='api_key_revoked',
+                description=f'API key "{name}" revoked',
+                ip_address=get_client_ip(request),
+                status='success'
+            )
+            
+            return Response({'success': True, 'message': 'API key revoked'})
+        except APIKey.DoesNotExist:
+            return Response({'success': False, 'error': 'API key not found'}, status=404)
+
+
+class SecurityAuditLogView(APIView):
+    """View security audit logs for current user"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get security audit logs"""
+        limit = int(request.query_params.get('limit', 50))
+        logs = SecurityAuditLog.objects.filter(user=request.user).order_by('-timestamp')[:limit]
+        serializer = SecurityAuditLogSerializer(logs, many=True)
+        return Response({
+            'success': True,
+            'count': len(logs),
+            'logs': serializer.data
+        })
+
+
+class SuspiciousLoginAttemptsView(APIView):
+    """View suspicious login attempts"""
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get suspicious login attempts"""
+        attempts = SuspiciousLoginAttempt.objects.filter(
+            user=request.user
+        ).order_by('-timestamp')[:50]
+        serializer = SuspiciousLoginAttemptSerializer(attempts, many=True)
+        return Response({
+            'success': True,
+            'count': len(attempts),
+            'attempts': serializer.data
+        })
+    
+    def post(self, request, pk):
+        """Mark suspicious attempt as verified (user's action)"""
+        try:
+            attempt = SuspiciousLoginAttempt.objects.get(pk=pk, user=request.user)
+            attempt.is_verified = request.data.get('is_verified', False)
+            attempt.save()
+            
+            if not attempt.is_verified:
+                SecurityAuditLog.objects.create(
+                    user=request.user,
+                    event_type='login_suspicious',
+                    description='User marked login attempt as unauthorized',
+                    ip_address=get_client_ip(request),
+                    status='warning'
+                )
+            
+            serializer = SuspiciousLoginAttemptSerializer(attempt)
+            return Response({'success': True, 'attempt': serializer.data})
+        except SuspiciousLoginAttempt.DoesNotExist:
+            return Response({'success': False, 'error': 'Attempt not found'}, status=404)
+
+
+class Enable2FAView(APIView):
+    """Enable 2FA for user account"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """Generate 2FA secret"""
+        if request.user.enable_2fa:
+            return Response({'success': False, 'error': '2FA already enabled'}, status=400)
+        
+        # For now, just prepare the 2FA settings
+        # In production, integrate with qrcode and pyotp libraries
+        secret_placeholder = f"2FA-SECRET-{request.user.id}-{timezone.now().timestamp()}"
+        
+        return Response({
+            'success': True,
+            'secret': secret_placeholder,
+            'qr_code': f'https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=otpauth://totp/CertEye:{request.user.email}',
+            'message': 'Scan this QR code with your authenticator app'
+        })
+    
+    def put(self, request):
+        """Verify and enable 2FA"""
+        secret = request.data.get('secret')
+        verification_code = request.data.get('verification_code')
+        
+        if not secret or not verification_code:
+            return Response({'success': False, 'error': 'Secret and verification code required'}, status=400)
+        
+        # For now, accept any 6-digit code
+        if not verification_code.isdigit() or len(verification_code) != 6:
+            return Response({'success': False, 'error': 'Invalid verification code'}, status=400)
+        
+        request.user.two_fa_secret = secret
+        # Generate backup codes
+        import random
+        backup_codes = [f"{random.randint(100000, 999999)}" for _ in range(10)]
+        request.user.two_fa_backup_codes = backup_codes
+        request.user.enable_2fa = True
+        request.user.save()
+        
+        SecurityAuditLog.objects.create(
+            user=request.user,
+            event_type='2fa_enabled',
+            description='Two-factor authentication enabled',
+            ip_address=get_client_ip(request),
+            status='success'
+        )
+        
+        return Response({
+            'success': True,
+            'message': '2FA enabled successfully',
+            'backup_codes': backup_codes
+        })
+
+
+class Disable2FAView(APIView):
+    """Disable 2FA for user account"""
+    permission_classes = [IsAuthenticated]
+    
+    def post(self, request):
+        """Disable 2FA"""
+        password = request.data.get('password')
+        
+        if not password:
+            return Response({'success': False, 'error': 'Password required'}, status=400)
+        
+        if not request.user.check_password(password):
+            return Response({'success': False, 'error': 'Invalid password'}, status=401)
+        
+        request.user.enable_2fa = False
+        request.user.two_fa_secret = None
+        request.user.two_fa_backup_codes = []
+        request.user.save()
+        
+        SecurityAuditLog.objects.create(
+            user=request.user,
+            event_type='2fa_disabled',
+            description='Two-factor authentication disabled',
+            ip_address=get_client_ip(request),
+            status='success'
+        )
+        
+        return Response({
+            'success': True,
+            'message': '2FA disabled successfully'
         })

@@ -52,6 +52,7 @@ function AdminLayout() {
             <>
               <NavLink className="nav-link admin-link" to="/admin/panel">👨‍💼 Admin Panel</NavLink>
               <NavLink className="nav-link admin-link" to="/admin/users">👥 User Management</NavLink>
+              <NavLink className="nav-link admin-link" to="/admin/adcs">🏢 AD CS Management</NavLink>
             </>
           )}
           <NavLink className="nav-link" to="/dashboard/settings">⚙️ Settings</NavLink>

@@ -1,0 +1,422 @@
+/* Settings Page Styles */
+
+.settings-container {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+.settings-header {
+  margin-bottom: 30px;
+  padding-bottom: 20px;
+  border-bottom: 2px solid #e9ecef;
+}
+
+.settings-header h3 {
+  color: #333;
+  font-weight: 600;
+  margin-bottom: 5px;
+}
+
+.settings-header .text-muted {
+  font-size: 0.95rem;
+}
+
+/* Alert Messages */
+.alert {
+  border-radius: 6px;
+  margin-bottom: 20px;
+  animation: slideDown 0.3s ease;
+}
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Settings Layout */
+.settings-layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 30px;
+}
+
+@media (max-width: 768px) {
+  .settings-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Tabs */
+.settings-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .settings-tabs {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+
+.tab-button {
+  padding: 12px 16px;
+  border: 2px solid #e9ecef;
+  background: white;
+  color: #666;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-weight: 500;
+  text-align: left;
+}
+
+.tab-button:hover {
+  border-color: #0066cc;
+  color: #0066cc;
+  background-color: #f8f9ff;
+}
+
+.tab-button.active {
+  border-color: #0066cc;
+  background-color: #0066cc;
+  color: white;
+}
+
+@media (max-width: 768px) {
+  .tab-button {
+    flex: 1;
+    min-width: 100px;
+    font-size: 0.9rem;
+  }
+}
+
+/* Settings Card */
+.settings-card {
+  background: white;
+  border-radius: 8px;
+  padding: 30px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.settings-card h4 {
+  color: #333;
+  font-weight: 600;
+  margin-bottom: 25px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Form Controls */
+.form-label {
+  color: #333;
+  margin-bottom: 8px;
+  font-size: 0.95rem;
+}
+
+.form-control,
+.form-select {
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 0.95rem;
+  transition: all 0.3s;
+}
+
+.form-control:focus,
+.form-select:focus {
+  border-color: #0066cc;
+  box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
+  outline: none;
+}
+
+.form-control:disabled {
+  background-color: #f5f5f5;
+  border-color: #e9ecef;
+  color: #999;
+}
+
+.form-check {
+  margin-bottom: 0;
+}
+
+.form-check-input {
+  width: 45px;
+  height: 24px;
+  margin-top: 0;
+  cursor: pointer;
+  border-radius: 12px;
+}
+
+.form-check-input:checked {
+  background-color: #0066cc;
+  border-color: #0066cc;
+}
+
+.form-check-label {
+  cursor: pointer;
+  margin-left: 10px;
+  padding-top: 2px;
+}
+
+/* Buttons */
+.btn {
+  border-radius: 6px;
+  padding: 10px 20px;
+  font-weight: 500;
+  transition: all 0.3s;
+}
+
+.btn-primary {
+  background-color: #0066cc;
+  border-color: #0066cc;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #0052a3;
+  border-color: #0052a3;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 102, 204, 0.3);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-outline-primary {
+  color: #0066cc;
+  border-color: #0066cc;
+}
+
+.btn-outline-primary:hover {
+  background-color: #0066cc;
+  border-color: #0066cc;
+}
+
+.btn-outline-danger {
+  color: #dc3545;
+  border-color: #dc3545;
+}
+
+.btn-outline-danger:hover {
+  background-color: #dc3545;
+  border-color: #dc3545;
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 0.9rem;
+}
+
+/* Security Section */
+.security-section {
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+}
+
+.security-section h5 {
+  color: #333;
+  font-weight: 600;
+  margin-bottom: 15px;
+}
+
+.session-info {
+  background: white;
+  padding: 15px;
+  border-radius: 6px;
+  border-left: 4px solid #28a745;
+}
+
+/* Tables */
+.table {
+  margin-bottom: 0;
+  font-size: 0.95rem;
+}
+
+.table thead {
+  background-color: #f8f9fa;
+  border-bottom: 2px solid #ddd;
+}
+
+.table th {
+  color: #666;
+  font-weight: 600;
+  padding: 12px;
+}
+
+.table td {
+  padding: 12px;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.table tbody tr:hover {
+  background-color: #f8f9fa;
+}
+
+/* Alerts */
+.alert-info {
+  background-color: #d1ecf1;
+  border-color: #bee5eb;
+  color: #0c5460;
+}
+
+.alert-info strong {
+  color: #0c5460;
+}
+
+.alert-warning {
+  background-color: #fff3cd;
+  border-color: #ffeaa7;
+  color: #856404;
+}
+
+.alert-warning strong {
+  color: #856404;
+}
+
+/* Badges */
+.badge {
+  padding: 6px 12px;
+  border-radius: 20px;
+  font-weight: 500;
+  font-size: 0.85rem;
+}
+
+.bg-success {
+  background-color: #28a745;
+}
+
+.bg-danger {
+  background-color: #dc3545;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .settings-container {
+    padding: 15px;
+  }
+
+  .settings-card {
+    padding: 20px;
+  }
+
+  .settings-layout {
+    gap: 20px;
+  }
+
+  .form-label {
+    font-size: 0.9rem;
+  }
+
+  .form-control,
+  .form-select {
+    font-size: 0.9rem;
+  }
+
+  .table-responsive {
+    font-size: 0.85rem;
+  }
+
+  .table th,
+  .table td {
+    padding: 8px;
+  }
+}
+
+/* Animations */
+@keyframes pulse {
+  0% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+.btn:disabled {
+  animation: pulse 2s infinite;
+}
+
+/* Custom scrollbar for settings-content */
+.settings-content {
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+}
+
+/* Text utilities */
+.fw-bold {
+  font-weight: 600;
+}
+
+.text-muted {
+  color: #999;
+  font-size: 0.9rem;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid #e9ecef;
+  margin: 20px 0;
+}
+
+/* Success/Error states */
+.form-control.is-invalid {
+  border-color: #dc3545;
+}
+
+.form-control.is-valid {
+  border-color: #28a745;
+}
+
+.invalid-feedback {
+  display: block;
+  margin-top: 5px;
+  color: #dc3545;
+  font-size: 0.85rem;
+}
+
+/* Password requirements */
+ul {
+  padding-left: 20px;
+}
+
+ul li {
+  margin-bottom: 5px;
+}
+
+/* Print styles */
+@media print {
+  .settings-tabs,
+  .btn {
+    display: none;
+  }
+
+  .settings-card {
+    box-shadow: none;
+    border: 1px solid #ddd;
+  }
+}

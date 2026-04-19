@@ -16,6 +16,7 @@ class Certificate(models.Model):
     days_remaining = models.IntegerField(default=0)
     risk_level = models.CharField(max_length=50, db_index=True)
     risk_score = models.PositiveIntegerField(default=0)
+    risk_reasoning = models.JSONField(default=dict, blank=True, help_text="Detailed breakdown of risk calculation (for audit trail)")
     last_scanned = models.DateTimeField(null=True, blank=True)
     source_type = models.CharField(max_length=50, default='scanner', db_index=True)
     status = models.CharField(max_length=50, default='active', db_index=True)

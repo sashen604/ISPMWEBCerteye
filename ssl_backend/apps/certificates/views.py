@@ -21,6 +21,7 @@ from .serializers import (
 from .services import CertificateFetchService
 from .internal_service import InternalCertificateService, InternalCertificateError
 from .agent_auth import CertificateAgent, AgentAuditLog, AgentRateLimiter
+from apps.audit_logs.services import AuditLoggingService
 
 
 class CertificateViewSet(viewsets.ModelViewSet):
@@ -105,8 +106,13 @@ class CertificateViewSet(viewsets.ModelViewSet):
         # Initialize service
         service = CertificateFetchService(timeout=timeout)
         
-        # Scan and store certificate
-        result = service.scan_and_store(domain, update_if_exists=update_if_exists)
+        # Scan and store certificate (with audit logging)
+        result = service.scan_and_store(
+            domain,
+            update_if_exists=update_if_exists,
+            user=request.user,
+            request=request,
+        )
         
         if result['success']:
             # Serialize the certificate
@@ -132,6 +138,36 @@ class CertificateViewSet(viewsets.ModelViewSet):
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
+    
+    def destroy(self, request, *args, **kwargs):
+        """Delete a certificate and log the action."""
+        certificate = self.get_object()
+        cert_data = {
+            'id': certificate.id,
+            'domain': certificate.domain,
+            'issuer': certificate.issuer,
+            'valid_from': str(certificate.valid_from),
+            'valid_to': str(certificate.valid_to),
+            'key_length': certificate.key_length,
+            'risk_level': certificate.risk_level,
+        }
+        
+        # Log the deletion
+        try:
+            AuditLoggingService.log_certificate_action(
+                user=request.user,
+                action='delete',
+                certificate_id=certificate.id,
+                certificate_name=certificate.subject or certificate.domain,
+                domain=certificate.domain,
+                old_values=cert_data,
+                request=request,
+            )
+        except Exception:
+            # Don't fail the deletion if logging fails
+            pass
+        
+        return super().destroy(request, *args, **kwargs)
     
     @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
     def scan_batch(self, request):
