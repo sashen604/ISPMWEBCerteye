@@ -26,6 +26,9 @@ class Certificate(models.Model):
     source_priority = models.IntegerField(default=0, help_text="Priority for deduplication: 100=internal, 50=scanner")
     certificate_chain = models.JSONField(default=list, blank=True, help_text="List of intermediate/root cert data")
     last_verified = models.DateTimeField(null=True, blank=True, help_text="Last validation timestamp")
+    is_self_signed = models.BooleanField(default=False, db_index=True, help_text="Whether certificate is self-signed")
+    san_list = models.JSONField(default=list, blank=True, help_text="List of Subject Alternative Names")
+    crypto_findings = models.JSONField(default=dict, blank=True, help_text="Detailed cryptographic analysis (algorithm strength, key analysis)")
     created_at = models.DateTimeField(default=timezone.now, db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
 

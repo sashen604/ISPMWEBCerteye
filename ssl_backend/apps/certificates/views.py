@@ -793,6 +793,108 @@ class CertificateViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
     
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def export_csv(self, request):
+        """
+        Export certificates to CSV with optional filtering.
+        
+        Query parameters:
+        - filter_type: all | expiring | high_risk | by_issuer | critical | custom
+        - days_threshold: For 'expiring' filter (default 30)
+        - risk_threshold: For 'high_risk' filter (default 60)
+        - issuer: For 'by_issuer' filter
+        - For 'custom' filter, all query params are treated as custom filters
+        
+        Returns CSV file download
+        """
+        from apps.certificates.services import CertificateExportService
+        
+        try:
+            service = CertificateExportService()
+            filter_type = request.query_params.get('filter_type', 'all').lower()
+            
+            if filter_type == 'all':
+                filename, content = service.export_all_certificates()
+            
+            elif filter_type == 'expiring':
+                days_threshold = int(request.query_params.get('days_threshold', 30))
+                filename, content = service.export_expiring_certificates(days_threshold)
+            
+            elif filter_type == 'high_risk':
+                risk_threshold = int(request.query_params.get('risk_threshold', 60))
+                filename, content = service.export_high_risk_certificates(risk_threshold)
+            
+            elif filter_type == 'by_issuer':
+                issuer = request.query_params.get('issuer')
+                if not issuer:
+                    return Response(
+                        {'error': 'issuer parameter required for by_issuer filter'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                filename, content = service.export_by_issuer(issuer)
+            
+            elif filter_type == 'critical':
+                filename, content = service.export_critical_alerts()
+            
+            elif filter_type == 'custom':
+                # Build custom filters from query params
+                filters = {}
+                
+                if domain_contains := request.query_params.get('domain_contains'):
+                    filters['domain_contains'] = domain_contains
+                if issuer := request.query_params.get('issuer'):
+                    filters['issuer'] = issuer
+                if risk_level := request.query_params.get('risk_level'):
+                    filters['risk_level'] = risk_level
+                if risk_score_min := request.query_params.get('risk_score_min'):
+                    filters['risk_score_min'] = int(risk_score_min)
+                if risk_score_max := request.query_params.get('risk_score_max'):
+                    filters['risk_score_max'] = int(risk_score_max)
+                if key_length_min := request.query_params.get('key_length_min'):
+                    filters['key_length_min'] = int(key_length_min)
+                if key_length_max := request.query_params.get('key_length_max'):
+                    filters['key_length_max'] = int(key_length_max)
+                if status_filter := request.query_params.get('status'):
+                    filters['status'] = status_filter
+                if source_type := request.query_params.get('source_type'):
+                    filters['source_type'] = source_type
+                
+                filename, content = service.export_custom_filter(filters)
+            
+            else:
+                return Response(
+                    {'error': f'Unknown filter_type: {filter_type}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Log the export action
+            try:
+                AuditLoggingService.log_action(
+                    user=request.user,
+                    action='certificate_export',
+                    description=f'Exported certificates with filter: {filter_type}',
+                    details={'filter_type': filter_type},
+                    request=request,
+                )
+            except Exception:
+                pass  # Don't fail if logging fails
+            
+            # Return CSV as file download
+            response = HttpResponse(content, content_type='text/csv')
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+        
+        except ValueError as e:
+            return Response(
+                {'error': f'Invalid parameter: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Export failed: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
     def _get_client_ip(self, request) -> str:
         """Extract client IP address from request."""
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')

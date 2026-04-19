@@ -44,8 +44,10 @@ function AdminLayout() {
         <nav className="nav flex-column gap-1">
           <NavLink className="nav-link" to="/dashboard">📊 Dashboard</NavLink>
           <NavLink className="nav-link" to="/dashboard/certificates">🔒 Certificates</NavLink>
+          <NavLink className="nav-link" to="/dashboard/export">📋 Export & Reports</NavLink>
           <NavLink className="nav-link" to="/dashboard/internal-certificates">🏢 Internal Certs</NavLink>
           <NavLink className="nav-link" to="/dashboard/alerts">⚠️ Alerts</NavLink>
+          <NavLink className="nav-link" to="/dashboard/alerts-generator">⚡ Generate Alerts</NavLink>
           <NavLink className="nav-link" to="/dashboard/internal-alerts">🔔 Internal Alerts</NavLink>
           <NavLink className="nav-link" to="/dashboard/internal-alerts-history">📜 Alert History</NavLink>
           {user?.is_superadmin && (

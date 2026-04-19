@@ -11,9 +11,9 @@ from datetime import datetime, timezone
 from django.utils import timezone as django_timezone
 from django.db import transaction
 
-from .models import Certificate
-from .fetchers import SSLCertificateFetcher, CertificateFetchError
-from .parsers import CertificateParser, CertificateParsingError
+from apps.certificates.models import Certificate
+from apps.certificates.fetchers import SSLCertificateFetcher, CertificateFetchError
+from apps.certificates.parsers import CertificateParser, CertificateParsingError
 from apps.risk_engine.services import RiskScoringEngine
 from apps.audit_logs.services import AuditLoggingService
 

@@ -25,4 +25,60 @@ api.interceptors.response.use(
   }
 )
 
+// Certificate Export API methods
+export const exportApi = {
+  // Export certificates with various filter options
+  // filterType: 'all', 'expiring', 'high_risk', 'by_issuer', 'critical', 'custom'
+  exportCertificates: async (filterType, params = {}) => {
+    try {
+      const queryParams = new URLSearchParams({
+        filter_type: filterType,
+        ...params
+      })
+      const response = await api.get(`/api/certificates/export_csv/?${queryParams}`, {
+        responseType: 'blob'
+      })
+      return response.data
+    } catch (error) {
+      throw error.response?.data || error
+    }
+  }
+}
+
+// Alert API methods
+export const alertApi = {
+  // Get all alerts with optional filters
+  getAlerts: async (filters = {}) => {
+    try {
+      const queryParams = new URLSearchParams(filters)
+      const response = await api.get(`/api/alerts/?${queryParams}`)
+      return response.data
+    } catch (error) {
+      throw error.response?.data || error
+    }
+  },
+
+  // Get alert statistics
+  getAlertStats: async () => {
+    try {
+      const response = await api.get('/api/alerts/stats/')
+      return response.data
+    } catch (error) {
+      throw error.response?.data || error
+    }
+  },
+
+  // Generate alerts (admin-only)
+  generateAlerts: async (alertTypes = ['EXPIRY', 'CRYPTO_WEAKNESS']) => {
+    try {
+      const response = await api.post('/api/alerts/generate/', {
+        alert_types: alertTypes
+      })
+      return response.data
+    } catch (error) {
+      throw error.response?.data || error
+    }
+  }
+}
+
 export default api
