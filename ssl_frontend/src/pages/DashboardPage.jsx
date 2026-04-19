@@ -1,25 +1,28 @@
 import { useState, useEffect } from 'react'
+import { BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import api from '../api'
 import '../styles/dashboard.css'
 
 function DashboardPage() {
-  const [stats, setStats] = useState({
+  const [summaryStats, setSummaryStats] = useState({
     total: 0,
-    critical: 0,
-    high: 0,
-    medium: 0,
-    low: 0,
-    expiring: 0
+    expired: 0,
+    expiringSoon: 0,
+    highRisk: 0
   })
-  const [domain, setDomain] = useState('')
-  const [scanning, setScanning] = useState(false)
-  const [scanResult, setScanResult] = useState(null)
-  const [scanError, setScanError] = useState('')
+  const [chartData, setChartData] = useState({
+    expiryData: [],
+    riskData: []
+  })
   const [certificates, setCertificates] = useState([])
+  const [alerts, setAlerts] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
+  const [riskFilter, setRiskFilter] = useState('')
+  const [page, setPage] = useState(1)
 
-  // Load statistics and certificates
+  // Load dashboard data
   useEffect(() => {
     loadDashboardData()
   }, [])
@@ -28,22 +31,44 @@ function DashboardPage() {
     try {
       setLoading(true)
       setError('')
-      console.log('[Dashboard] Fetching certificates...')
-      const response = await api.get('/api/certificates/')
+      console.log('[Dashboard] Loading statistics...')
       
-      const certs = response.data.results || response.data || []
-      setCertificates(certs.slice(0, 5)) // Show 5 latest
-
-      // Calculate stats
-      const statsData = {
-        total: certs.length,
-        critical: certs.filter(c => c.risk_level === 'critical').length,
-        high: certs.filter(c => c.risk_level === 'high').length,
-        medium: certs.filter(c => c.risk_level === 'medium').length,
-        low: certs.filter(c => c.risk_level === 'low').length,
-        expiring: certs.filter(c => c.days_remaining <= 30).length
-      }
-      setStats(statsData)
+      // Fetch statistics
+      const statsResponse = await api.get('/api/certificates/statistics/')
+      const statsData = statsResponse.data
+      
+      // Extract summary stats
+      const byRiskLevel = statsData.by_risk_level || {}
+      const expirationStats = statsData.expiration_stats || {}
+      
+      setSummaryStats({
+        total: statsData.total_certificates || 0,
+        expired: expirationStats.expired || 0,
+        expiringSoon: expirationStats.expiring_soon || 0,
+        highRisk: (byRiskLevel.CRITICAL || 0) + (byRiskLevel.HIGH || 0)
+      })
+      
+      // Prepare chart data
+      setChartData({
+        expiryData: [
+          { name: 'Expired', value: expirationStats.expired || 0, fill: '#dc3545' },
+          { name: 'Expiring Soon', value: expirationStats.expiring_soon || 0, fill: '#ffc107' },
+          { name: 'Active', value: expirationStats.active || 0, fill: '#28a745' }
+        ],
+        riskData: [
+          { name: 'CRITICAL', value: byRiskLevel.CRITICAL || 0, fill: '#dc3545' },
+          { name: 'HIGH', value: byRiskLevel.HIGH || 0, fill: '#fd7e14' },
+          { name: 'MEDIUM', value: byRiskLevel.MEDIUM || 0, fill: '#ffc107' },
+          { name: 'LOW', value: byRiskLevel.LOW || 0, fill: '#28a745' }
+        ]
+      })
+      
+      console.log('[Dashboard] Fetching certificates...')
+      // Fetch certificates
+      const certResponse = await api.get('/api/certificates/?limit=100')
+      const certs = certResponse.data.results || certResponse.data || []
+      setCertificates(certs)
+      
       console.log('[Dashboard] Dashboard data loaded successfully')
     } catch (err) {
       console.error('[Dashboard] Failed to load dashboard:', err)
@@ -53,48 +78,39 @@ function DashboardPage() {
     }
   }
 
-  const handleScan = async (e) => {
-    e.preventDefault()
-    if (!domain.trim()) return
 
-    setScanError('')
-    setScanResult(null)
-    setScanning(true)
-
-    try {
-      console.log(`[Dashboard] Scanning domain: ${domain}`)
-      const response = await api.post('/api/certificates/scan/', { domain })
-      setScanResult(response.data)
-      setDomain('')
-      // Refresh stats after scan
-      setTimeout(loadDashboardData, 1000)
-    } catch (err) {
-      console.error('[Dashboard] Failed to scan domain:', err)
-      setScanError(err.response?.data?.detail || err.response?.data?.error || 'Failed to scan domain')
-    } finally {
-      setScanning(false)
-    }
+  // Filter and search certificates
+  const getFilteredCertificates = () => {
+    return certificates.filter(cert => {
+      const matchesSearch = cert.domain.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                           cert.issuer.toLowerCase().includes(searchTerm.toLowerCase())
+      const matchesRisk = !riskFilter || cert.risk_level?.toUpperCase() === riskFilter
+      return matchesSearch && matchesRisk
+    })
   }
 
   const getRiskColor = (level) => {
     const colors = {
-      'critical': '#c77dff',
-      'high': '#b078e0',
-      'medium': '#8127ca',
-      'low': '#7a21d4'
+      'CRITICAL': '#dc3545',
+      'HIGH': '#fd7e14',
+      'MEDIUM': '#ffc107',
+      'LOW': '#28a745'
     }
-    return colors[level] || '#7a21d4'
+    return colors[level] || '#6c757d'
   }
 
   const getRiskEmoji = (level) => {
     const emojis = {
-      'critical': '🔴',
-      'high': '🟠',
-      'medium': '🟡',
-      'low': '🟢'
+      'CRITICAL': '🔴',
+      'HIGH': '🟠',
+      'MEDIUM': '🟡',
+      'LOW': '🟢'
     }
     return emojis[level] || '⚪'
   }
+
+  const filteredCerts = getFilteredCertificates()
+  const totalResults = filteredCerts.length
 
   return (
     <div className="dashboard-container">
@@ -102,194 +118,248 @@ function DashboardPage() {
       <div className="dashboard-header">
         <div>
           <h2 className="dashboard-title">📊 Certificate Dashboard</h2>
-          <p className="dashboard-subtitle">Overview of certificate health and risk assessment</p>
+          <p className="dashboard-subtitle">Overview of certificate health, risk assessment, and expiration tracking</p>
         </div>
-        <button className="btn btn-refresh" onClick={loadDashboardData} disabled={loading}>
+        <button className="btn btn-primary" onClick={loadDashboardData} disabled={loading}>
           🔄 Refresh
         </button>
       </div>
 
       {/* Error Message */}
       {error && (
-        <div className="alert alert-danger alert-custom">
+        <div className="alert alert-danger alert-dismissible fade show" role="alert">
           ⚠️ {error}
+          <button type="button" className="btn-close" onClick={() => setError('')}></button>
         </div>
       )}
 
       {/* Loading State */}
       {loading && !error && (
-        <div className="alert alert-info alert-custom">
+        <div className="alert alert-info">
           ⏳ Loading dashboard data...
         </div>
       )}
 
-      {/* Domain Scanner Card */}
-      <div className="card dashboard-card scanner-card">
-        <div className="card-header-custom">
-          <h5 className="card-title-custom">🔍 Scan Public Domain</h5>
-          <p className="card-subtitle">Enter a domain to retrieve its SSL/TLS certificate</p>
-        </div>
-        <div className="card-body-custom">
-          <form onSubmit={handleScan} className="scan-form">
-            <div className="input-group scan-input">
-              <input
-                type="text"
-                className="form-control"
-                placeholder="e.g., google.com, github.com, example.org"
-                value={domain}
-                onChange={(e) => setDomain(e.target.value)}
-                disabled={scanning}
-              />
-              <button 
-                type="submit" 
-                className="btn btn-scan"
-                disabled={scanning || !domain.trim()}
-              >
-                {scanning ? '⏳ Scanning...' : '🔎 Scan'}
-              </button>
-            </div>
-          </form>
-
-          {scanError && (
-            <div className="alert alert-danger alert-custom mt-3">
-              ❌ {scanError}
-            </div>
-          )}
-
-          {scanResult && (
-            <div className="scan-result mt-3">
-              <div className="result-header">
-                <h6 className="result-domain">{scanResult.domain}</h6>
-                <span className={`badge badge-risk badge-${scanResult.risk_level}`}>
-                  {getRiskEmoji(scanResult.risk_level)} {scanResult.risk_level?.toUpperCase()}
-                </span>
-              </div>
-              <div className="result-grid">
-                <div className="result-item">
-                  <span className="result-label">Risk Score</span>
-                  <span className="result-value">{scanResult.risk_score}/100</span>
-                </div>
-                <div className="result-item">
-                  <span className="result-label">Valid From</span>
-                  <span className="result-value">{new Date(scanResult.valid_from).toLocaleDateString()}</span>
-                </div>
-                <div className="result-item">
-                  <span className="result-label">Expires</span>
-                  <span className="result-value">{new Date(scanResult.valid_to).toLocaleDateString()}</span>
-                </div>
-                <div className="result-item">
-                  <span className="result-label">Days Left</span>
-                  <span className="result-value">{scanResult.days_remaining}</span>
+      {!loading && (
+        <>
+          {/* Summary Cards */}
+          <div className="row mb-4">
+            <div className="col-md-6 col-lg-3 mb-3">
+              <div className="summary-card card h-100">
+                <div className="card-body">
+                  <div className="card-icon">📋</div>
+                  <h6 className="card-title">Total Certificates</h6>
+                  <div className="card-value">{summaryStats.total}</div>
                 </div>
               </div>
-              <div className="result-details">
-                <p><strong>Subject:</strong> {scanResult.subject}</p>
-                <p><strong>Issuer:</strong> {scanResult.issuer}</p>
-                <p><strong>Algorithm:</strong> {scanResult.signature_algorithm}</p>
-                <p><strong>Key Length:</strong> {scanResult.key_length} bits</p>
+            </div>
+            <div className="col-md-6 col-lg-3 mb-3">
+              <div className="summary-card card h-100 expired">
+                <div className="card-body">
+                  <div className="card-icon">⏱️</div>
+                  <h6 className="card-title">Expired</h6>
+                  <div className="card-value">{summaryStats.expired}</div>
+                </div>
               </div>
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* Statistics Cards */}
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-icon">📋</div>
-          <div className="stat-content">
-            <div className="stat-label">Total Certificates</div>
-            <div className="stat-value">{stats.total}</div>
+            <div className="col-md-6 col-lg-3 mb-3">
+              <div className="summary-card card h-100 expiring">
+                <div className="card-body">
+                  <div className="card-icon">⚠️</div>
+                  <h6 className="card-title">Expiring Soon</h6>
+                  <div className="card-value">{summaryStats.expiringSoon}</div>
+                </div>
+              </div>
+            </div>
+            <div className="col-md-6 col-lg-3 mb-3">
+              <div className="summary-card card h-100 high-risk">
+                <div className="card-body">
+                  <div className="card-icon">🔴</div>
+                  <h6 className="card-title">High Risk</h6>
+                  <div className="card-value">{summaryStats.highRisk}</div>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div className="stat-card critical">
-          <div className="stat-icon">🔴</div>
-          <div className="stat-content">
-            <div className="stat-label">Critical</div>
-            <div className="stat-value">{stats.critical}</div>
+          {/* Charts Row */}
+          <div className="row mb-4">
+            <div className="col-md-6">
+              <div className="card h-100">
+                <div className="card-header bg-light">
+                  <h6 className="mb-0">Certificate Expiry Distribution</h6>
+                </div>
+                <div className="card-body d-flex justify-content-center">
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={chartData.expiryData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="name" />
+                      <YAxis />
+                      <Tooltip />
+                      <Bar dataKey="value" radius={[8, 8, 0, 0]}>
+                        {chartData.expiryData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.fill} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+            <div className="col-md-6">
+              <div className="card h-100">
+                <div className="card-header bg-light">
+                  <h6 className="mb-0">Risk Level Distribution</h6>
+                </div>
+                <div className="card-body d-flex justify-content-center">
+                  <ResponsiveContainer width="100%" height={300}>
+                    <PieChart>
+                      <Pie
+                        data={chartData.riskData}
+                        cx="50%"
+                        cy="50%"
+                        labelLine={false}
+                        label={({ name, value }) => `${name}: ${value}`}
+                        outerRadius={80}
+                        fill="#8884d8"
+                        dataKey="value"
+                      >
+                        {chartData.riskData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.fill} />
+                        ))}
+                      </Pie>
+                      <Tooltip />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
 
-        <div className="stat-card high">
-          <div className="stat-icon">🟠</div>
-          <div className="stat-content">
-            <div className="stat-label">High Risk</div>
-            <div className="stat-value">{stats.high}</div>
-          </div>
-        </div>
+          {/* Certificate Inventory */}
+          <div className="card mb-4">
+            <div className="card-header bg-light">
+              <h6 className="mb-0">📜 Certificate Inventory</h6>
+            </div>
+            <div className="card-body">
+              {/* Search and Filter */}
+              <div className="row mb-3 g-2">
+                <div className="col-md-8">
+                  <input
+                    type="text"
+                    className="form-control"
+                    placeholder="Search by domain or issuer..."
+                    value={searchTerm}
+                    onChange={(e) => {
+                      setSearchTerm(e.target.value)
+                      setPage(1)
+                    }}
+                  />
+                </div>
+                <div className="col-md-4">
+                  <select
+                    className="form-select"
+                    value={riskFilter}
+                    onChange={(e) => {
+                      setRiskFilter(e.target.value)
+                      setPage(1)
+                    }}
+                  >
+                    <option value="">All Risk Levels</option>
+                    <option value="CRITICAL">🔴 CRITICAL</option>
+                    <option value="HIGH">🟠 HIGH</option>
+                    <option value="MEDIUM">🟡 MEDIUM</option>
+                    <option value="LOW">🟢 LOW</option>
+                  </select>
+                </div>
+              </div>
 
-        <div className="stat-card medium">
-          <div className="stat-icon">🟡</div>
-          <div className="stat-content">
-            <div className="stat-label">Medium Risk</div>
-            <div className="stat-value">{stats.medium}</div>
-          </div>
-        </div>
+              {/* Results Info */}
+              <p className="text-muted small mb-3">
+                Showing {filteredCerts.length} of {certificates.length} certificates
+              </p>
 
-        <div className="stat-card low">
-          <div className="stat-icon">🟢</div>
-          <div className="stat-content">
-            <div className="stat-label">Low Risk</div>
-            <div className="stat-value">{stats.low}</div>
-          </div>
-        </div>
+              {/* Certificate Table */}
+              <div className="table-responsive">
+                <table className="table table-hover mb-0">
+                  <thead>
+                    <tr className="table-light">
+                      <th>Domain</th>
+                      <th>Issuer</th>
+                      <th>Risk Level</th>
+                      <th>Score</th>
+                      <th>Expires</th>
+                      <th>Days Left</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredCerts.length > 0 ? (
+                      filteredCerts.slice((page - 1) * 10, page * 10).map((cert) => {
+                        const daysLeft = cert.days_remaining || 0
+                        const isExpired = daysLeft < 0
+                        const isExpiringSoon = daysLeft >= 0 && daysLeft <= 30
+                        
+                        return (
+                          <tr key={cert.id}>
+                            <td>
+                              <span className="font-monospace">{cert.domain}</span>
+                            </td>
+                            <td className="text-truncate" title={cert.issuer}>{cert.issuer}</td>
+                            <td>
+                              <span 
+                                className="badge"
+                                style={{ backgroundColor: getRiskColor(cert.risk_level) }}
+                              >
+                                {getRiskEmoji(cert.risk_level)} {cert.risk_level}
+                              </span>
+                            </td>
+                            <td>
+                              <span className="badge bg-secondary">{cert.risk_score}/100</span>
+                            </td>
+                            <td>{new Date(cert.valid_to).toLocaleDateString()}</td>
+                            <td>
+                              <span className={`badge ${isExpired ? 'bg-danger' : isExpiringSoon ? 'bg-warning text-dark' : 'bg-success'}`}>
+                                {isExpired ? 'EXPIRED' : `${daysLeft}d`}
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })
+                    ) : (
+                      <tr>
+                        <td colSpan="6" className="text-center text-muted py-4">
+                          No certificates found. {searchTerm || riskFilter ? 'Try adjusting your filters.' : 'Scan a domain to get started!'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
 
-        <div className="stat-card expiring">
-          <div className="stat-icon">⏰</div>
-          <div className="stat-content">
-            <div className="stat-label">Expiring Soon</div>
-            <div className="stat-value">{stats.expiring}</div>
-          </div>
-        </div>
-      </div>
-
-      {/* Recent Certificates */}
-      <div className="card dashboard-card">
-        <div className="card-header-custom">
-          <h5 className="card-title-custom">📜 Recent Certificates</h5>
-        </div>
-        <div className="table-responsive">
-          <table className="table table-hover mb-0">
-            <thead>
-              <tr className="table-header">
-                <th>Domain</th>
-                <th>Risk Level</th>
-                <th>Score</th>
-                <th>Expires</th>
-                <th>Days Left</th>
-              </tr>
-            </thead>
-            <tbody>
-              {certificates.length > 0 ? (
-                certificates.map((cert) => (
-                  <tr key={cert.id} className="table-row">
-                    <td className="cert-domain">{cert.domain}</td>
-                    <td>
-                      <span className={`badge badge-risk badge-${cert.risk_level}`}>
-                        {getRiskEmoji(cert.risk_level)} {cert.risk_level?.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="risk-score">{cert.risk_score}/100</td>
-                    <td>{new Date(cert.valid_to).toLocaleDateString()}</td>
-                    <td>
-                      <span className={`days-badge ${cert.days_remaining <= 30 ? 'expiring' : ''}`}>
-                        {cert.days_remaining}d
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              ) : (
-                <tr>
-                  <td colSpan="5" className="text-center text-muted py-4">
-                    No certificates yet. Scan a domain to get started!
-                  </td>
-                </tr>
+              {/* Pagination */}
+              {filteredCerts.length > 10 && (
+                <nav className="mt-3" aria-label="Page navigation">
+                  <ul className="pagination justify-content-center mb-0">
+                    <li className={`page-item ${page === 1 ? 'disabled' : ''}`}>
+                      <button className="page-link" onClick={() => setPage(p => p - 1)} disabled={page === 1}>
+                        Previous
+                      </button>
+                    </li>
+                    <li className="page-item active">
+                      <span className="page-link">Page {page}</span>
+                    </li>
+                    <li className={`page-item ${page * 10 >= filteredCerts.length ? 'disabled' : ''}`}>
+                      <button className="page-link" onClick={() => setPage(p => p + 1)} disabled={page * 10 >= filteredCerts.length}>
+                        Next
+                      </button>
+                    </li>
+                  </ul>
+                </nav>
               )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   )
 }

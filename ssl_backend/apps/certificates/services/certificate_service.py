@@ -12,7 +12,7 @@ from django.utils import timezone as django_timezone
 from django.db import transaction
 
 from apps.certificates.models import Certificate
-from apps.certificates.fetchers import SSLCertificateFetcher, CertificateFetchError
+from apps.certificates.fetchers import SSLCertificateFetcher, CertificateFetchError, clean_domain
 from apps.certificates.parsers import CertificateParser, CertificateParsingError
 from apps.risk_engine.services import RiskScoringEngine
 from apps.audit_logs.services import AuditLoggingService
@@ -56,7 +56,7 @@ class CertificateFetchService:
         - Store or update in database
         
         Args:
-            domain (str): Domain to scan (e.g., 'google.com')
+            domain (str): Domain to scan (e.g., 'google.com' or 'https://www.google.com/')
             update_if_exists (bool): Update existing certificate if found (default: True)
             user: User object for audit logging
             request: HTTP request object for IP extraction
@@ -77,6 +77,18 @@ class CertificateFetchService:
             ...     print(f"Scanned {cert.domain}: expires in {cert.days_remaining} days")
         """
         try:
+            # Clean domain input (handles URLs, www prefixes, etc.)
+            domain = clean_domain(domain)
+            
+            if not domain:
+                return {
+                    'success': False,
+                    'message': 'Invalid domain name',
+                    'certificate': None,
+                    'error': 'Domain name cannot be empty',
+                    'status': 'error'
+                }
+            
             # Step 1: Fetch certificate
             x509_cert, port = self.fetcher.fetch_from_any_port(domain)
             

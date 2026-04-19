@@ -9,12 +9,62 @@ import socket
 import ssl
 from typing import Optional, Tuple
 from datetime import datetime
+from urllib.parse import urlparse
 
 import certifi
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.ssl_ import create_urllib3_context
 from OpenSSL import SSL, crypto
+
+
+def clean_domain(domain_input: str) -> str:
+    """
+    Clean and extract domain name from various input formats.
+    
+    Handles:
+    - Full URLs: https://www.google.com/ -> google.com
+    - URLs with paths: https://example.com/path -> example.com
+    - URLs with ports: https://example.com:8443 -> example.com
+    - Domains with www: www.google.com -> google.com
+    - Plain domains: google.com -> google.com
+    
+    Args:
+        domain_input (str): Raw domain or URL input
+        
+    Returns:
+        str: Cleaned domain name
+        
+    Examples:
+        >>> clean_domain('https://www.google.com/')
+        'google.com'
+        >>> clean_domain('www.example.com')
+        'example.com'
+        >>> clean_domain('google.com')
+        'google.com'
+    """
+    if not domain_input:
+        return domain_input
+    
+    # Remove whitespace
+    domain_input = domain_input.strip()
+    
+    # If it looks like a URL, parse it
+    if '://' in domain_input or domain_input.startswith('//'):
+        try:
+            parsed = urlparse(domain_input if '://' in domain_input else f'//{domain_input}')
+            domain = parsed.hostname or parsed.netloc
+        except Exception:
+            domain = domain_input
+    else:
+        # Extract just the domain part if port is included
+        domain = domain_input.split(':')[0] if ':' in domain_input else domain_input
+    
+    # Remove www. prefix if present
+    if domain and domain.lower().startswith('www.'):
+        domain = domain[4:]
+    
+    return domain.lower() if domain else domain_input
 
 
 class CertificateFetchError(Exception):

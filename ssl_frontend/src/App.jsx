@@ -7,6 +7,7 @@ import DashboardPage from './pages/DashboardPage.jsx'
 import AdminPanelPage from './pages/AdminPanelPage.jsx'
 import UserManagementPage from './pages/UserManagementPage.jsx'
 import CertificatesPage from './pages/CertificatesPage.jsx'
+import ScanCertificatePage from './pages/ScanCertificatePage.jsx'
 import AlertsPage from './pages/AlertsPage.jsx'
 import ExportPage from './pages/ExportPage.jsx'
 import AlertGeneratorPage from './pages/AlertGeneratorPage.jsx'
@@ -50,6 +51,7 @@ function App() {
       >
         <Route index element={<DashboardPage />} />
         <Route path="certificates" element={<CertificatesPage />} />
+        <Route path="scan" element={<ScanCertificatePage />} />
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="export" element={<ExportPage />} />
         <Route path="alerts-generator" element={<AlertGeneratorPage />} />
@@ -74,6 +76,7 @@ function App() {
         <Route path="users" element={<UserManagementPage />} />
         <Route path="adcs" element={<ADCSManagementPage />} />
         <Route path="certificates" element={<CertificatesPage />} />
+        <Route path="scan" element={<ScanCertificatePage />} />
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="export" element={<ExportPage />} />
         <Route path="alerts-generator" element={<AlertGeneratorPage />} />
