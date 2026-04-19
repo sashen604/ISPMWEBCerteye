@@ -1,0 +1,207 @@
+/* Dark Amethyst Color Palette */
+:root {
+  --dark-amethyst-100: #030008;
+  --dark-amethyst-200: #060010;
+  --dark-amethyst-300: #090018;
+  --dark-amethyst-400: #0c0021;
+  --dark-amethyst-500: #10002b;
+  --dark-amethyst-600: #310087;
+  --dark-amethyst-700: #5400e4;
+  --dark-amethyst-800: #8843ff;
+  --dark-amethyst-900: #c4a1ff;
+
+  --indigo-600: #650fb5;
+  --indigo-700: #8d25ed;
+  --indigo-800: #b36ef3;
+  --indigo-900: #d9b6f9;
+
+  --royal-violet: #7b2cbf;
+  --lavender-purple: #9d4edd;
+  --mauve-magic: #c77dff;
+  --mauve: #e0aaff;
+}
+
+.auth-page {
+  min-height: 100vh;
+  background: linear-gradient(135deg, var(--dark-amethyst-600) 0%, var(--indigo-600) 50%, var(--royal-violet) 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.auth-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 30px;
+  width: 100%;
+  max-width: 420px;
+}
+
+.auth-card {
+  background: linear-gradient(135deg, rgba(16, 0, 43, 0.95) 0%, rgba(49, 0, 135, 0.95) 100%);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(200, 161, 255, 0.2);
+  border-radius: 16px;
+  padding: 40px 30px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.4);
+  animation: slideIn 0.5s ease-out;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.auth-header {
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.auth-title {
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--mauve);
+  margin: 0;
+  text-shadow: 0 2px 10px rgba(200, 161, 255, 0.3);
+}
+
+.auth-subtitle {
+  color: rgba(200, 161, 255, 0.7);
+  font-size: 14px;
+  margin: 8px 0 0;
+  font-weight: 500;
+}
+
+.auth-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 30px;
+  background: rgba(16, 0, 43, 0.5);
+  padding: 4px;
+  border-radius: 8px;
+}
+
+.auth-tab {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  color: rgba(200, 161, 255, 0.6);
+  font-weight: 600;
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.3s ease;
+}
+
+.auth-tab.active {
+  background: linear-gradient(135deg, var(--indigo-700) 0%, var(--mauve-magic) 100%);
+  color: white;
+  box-shadow: 0 4px 15px rgba(141, 37, 237, 0.3);
+}
+
+.auth-tab:hover:not(.active) {
+  color: rgba(200, 161, 255, 0.9);
+}
+
+.form-label {
+  color: rgba(200, 161, 255, 0.9);
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.form-control {
+  background: rgba(16, 0, 43, 0.6);
+  border: 1px solid rgba(200, 161, 255, 0.2);
+  color: white;
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: all 0.3s ease;
+}
+
+.form-control:focus {
+  background: rgba(16, 0, 43, 0.8);
+  border-color: var(--mauve-magic);
+  box-shadow: 0 0 0 3px rgba(200, 161, 255, 0.1);
+  color: white;
+}
+
+.form-control::placeholder {
+  color: rgba(200, 161, 255, 0.4);
+}
+
+.alert-danger {
+  background: rgba(199, 125, 255, 0.1);
+  border: 1px solid rgba(199, 125, 255, 0.3);
+  color: #ffb3cc;
+  border-radius: 8px;
+}
+
+.auth-btn {
+  background: linear-gradient(135deg, var(--indigo-700) 0%, var(--mauve-magic) 100%);
+  border: none;
+  padding: 12px 24px;
+  font-weight: 600;
+  border-radius: 8px;
+  transition: all 0.3s ease;
+  margin-top: 10px;
+}
+
+.auth-btn:hover:not(:disabled) {
+  box-shadow: 0 8px 30px rgba(141, 37, 237, 0.4);
+  transform: translateY(-2px);
+}
+
+.auth-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auth-footer {
+  text-align: center;
+  color: rgba(200, 161, 255, 0.7);
+  font-size: 14px;
+  margin: 20px 0 0;
+}
+
+.auth-link {
+  background: none;
+  border: none;
+  color: var(--mauve-magic);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  transition: color 0.3s ease;
+}
+
+.auth-link:hover {
+  color: var(--mauve);
+}
+
+.auth-footer-info {
+  text-align: center;
+  color: rgba(200, 161, 255, 0.6);
+  font-size: 13px;
+}
+
+/* Spinner styling */
+.spinner-border {
+  border-color: rgba(255, 255, 255, 0.2);
+  border-right-color: white;
+}
+
+.spinner-border-sm {
+  width: 1rem;
+  height: 1rem;
+}
