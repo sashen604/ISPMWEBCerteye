@@ -5,6 +5,7 @@ import HomePage from './pages/HomePage.jsx'
 import LoginPage from './pages/LoginPage.jsx'
 import DashboardPage from './pages/DashboardPage.jsx'
 import AdminPanelPage from './pages/AdminPanelPage.jsx'
+import UserManagementPage from './pages/UserManagementPage.jsx'
 import CertificatesPage from './pages/CertificatesPage.jsx'
 import AlertsPage from './pages/AlertsPage.jsx'
 import InternalCertificatesPage from './pages/InternalCertificatesPage.jsx'
@@ -65,6 +66,7 @@ function App() {
         <Route index element={<Navigate to="/admin/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="panel" element={<AdminPanelPage />} />
+        <Route path="users" element={<UserManagementPage />} />
         <Route path="certificates" element={<CertificatesPage />} />
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="internal-certificates" element={<InternalCertificatesPage />} />
