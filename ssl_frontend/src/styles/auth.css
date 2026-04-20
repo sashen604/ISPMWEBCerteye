@@ -1,20 +1,7 @@
 /* Metallic Chic Blue Color Palette */
-:root {
-  --primary-blue: #3d52a0;
-  --primary-blue-light: #5b7cc4;
-  --accent-blue: #7091e6;
-  --soft-purple: #a8b8e6;
-  --neutral-gray: #d0d5e0;
-  --metallic-dark: #1a1f3a;
-  --metallic-light: #f5f7fa;
-  --white: #ffffff;
-  --text-dark: #2d3e5f;
-  --text-light: #8b95a5;
-}
-
 .auth-page {
   min-height: 100vh;
-  background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf5 50%, #dce2f0 100%);
+  background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 50%, var(--bg-tertiary) 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -31,7 +18,7 @@
 }
 
 .auth-card {
-  background: var(--white);
+  background: var(--bg-secondary);
   border: 1px solid var(--neutral-gray);
   border-radius: 16px;
   padding: 40px 30px;
@@ -93,7 +80,7 @@
 
 .auth-tab.active {
   background: linear-gradient(135deg, var(--primary-blue) 0%, var(--primary-blue-light) 100%);
-  color: white;
+  color: var(--text-white);
   box-shadow: 0 4px 12px rgba(61, 82, 160, 0.2);
 }
 
@@ -119,14 +106,14 @@
 }
 
 .form-control:focus {
-  background: var(--white);
+  background: var(--bg-secondary);
   border-color: var(--primary-blue);
   box-shadow: 0 0 0 3px rgba(61, 82, 160, 0.08);
   color: var(--text-dark);
 }
 
 .form-control::placeholder {
-  color: rgba(139, 149, 165, 0.5);
+  color: rgba(238, 238, 238, 0.78);
 }
 
 .alert-danger {
@@ -144,7 +131,7 @@
   border-radius: 8px;
   transition: all 0.3s ease;
   margin-top: 10px;
-  color: white;
+  color: var(--text-white);
 }
 
 .auth-btn:hover:not(:disabled) {
@@ -188,7 +175,7 @@
 /* Spinner styling */
 .spinner-border {
   border-color: rgba(255, 255, 255, 0.2);
-  border-right-color: white;
+  border-right-color: var(--text-white);
 }
 
 .spinner-border-sm {

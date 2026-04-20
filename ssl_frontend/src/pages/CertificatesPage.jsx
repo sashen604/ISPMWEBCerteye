@@ -160,10 +160,10 @@ function CertificatesPage() {
   // Helper functions
   const getRiskColor = (risk) => {
     switch (risk) {
-      case 'CRITICAL': return '#c77dff'
-      case 'HIGH': return '#b078e0'
-      case 'MEDIUM': return '#8127ca'
-      case 'LOW': return '#7a21d4'
+      case 'CRITICAL': return '#dc2626'
+      case 'HIGH': return '#ea580c'
+      case 'MEDIUM': return '#f59e0b'
+      case 'LOW': return '#16a34a'
       default: return '#6c757d'
     }
   }
@@ -227,7 +227,7 @@ function CertificatesPage() {
           <div className="col-md-3">
             <div className="card text-center border-danger">
               <div className="card-body">
-                <h4 style={{ color: '#c77dff' }}>{statistics.by_risk_level.CRITICAL}</h4>
+                <h4 style={{ color: '#dc2626' }}>{statistics.by_risk_level.CRITICAL}</h4>
                 <small className="text-muted">Critical 🔴</small>
               </div>
             </div>
@@ -235,7 +235,7 @@ function CertificatesPage() {
           <div className="col-md-3">
             <div className="card text-center border-warning">
               <div className="card-body">
-                <h4 style={{ color: '#b078e0' }}>{statistics.by_risk_level.HIGH}</h4>
+                <h4 style={{ color: '#ea580c' }}>{statistics.by_risk_level.HIGH}</h4>
                 <small className="text-muted">High 🟠</small>
               </div>
             </div>

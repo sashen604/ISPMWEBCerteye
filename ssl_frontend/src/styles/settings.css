@@ -9,11 +9,11 @@
 .settings-header {
   margin-bottom: 30px;
   padding-bottom: 20px;
-  border-bottom: 2px solid #e9ecef;
+  border-bottom: 2px solid var(--accent-teal);
 }
 
 .settings-header h3 {
-  color: #333;
+  color: var(--text-light);
   font-weight: 600;
   margin-bottom: 5px;
 }
@@ -69,9 +69,9 @@
 
 .tab-button {
   padding: 12px 16px;
-  border: 2px solid #e9ecef;
-  background: white;
-  color: #666;
+  border: 2px solid var(--accent-teal);
+  background: var(--bg-secondary);
+  color: var(--text-muted);
   border-radius: 6px;
   cursor: pointer;
   transition: all 0.3s;
@@ -80,15 +80,15 @@
 }
 
 .tab-button:hover {
-  border-color: #0066cc;
-  color: #0066cc;
-  background-color: #f8f9ff;
+  border-color: var(--primary-action);
+  color: var(--primary-action);
+  background-color: var(--bg-tertiary);
 }
 
 .tab-button.active {
-  border-color: #0066cc;
-  background-color: #0066cc;
-  color: white;
+  border-color: var(--primary-action);
+  background-color: var(--primary-action);
+  color: var(--text-white);
 }
 
 @media (max-width: 768px) {
@@ -101,7 +101,7 @@
 
 /* Settings Card */
 .settings-card {
-  background: white;
+  background: var(--bg-secondary);
   border-radius: 8px;
   padding: 30px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
@@ -118,7 +118,7 @@
 }
 
 .settings-card h4 {
-  color: #333;
+  color: var(--text-light);
   font-weight: 600;
   margin-bottom: 25px;
   display: flex;
@@ -128,14 +128,14 @@
 
 /* Form Controls */
 .form-label {
-  color: #333;
+  color: var(--text-light);
   margin-bottom: 8px;
   font-size: 0.95rem;
 }
 
 .form-control,
 .form-select {
-  border: 1px solid #ddd;
+  border: 1px solid var(--accent-teal);
   border-radius: 6px;
   padding: 10px 12px;
   font-size: 0.95rem;
@@ -144,15 +144,15 @@
 
 .form-control:focus,
 .form-select:focus {
-  border-color: #0066cc;
+  border-color: var(--primary-action);
   box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.1);
   outline: none;
 }
 
 .form-control:disabled {
-  background-color: #f5f5f5;
-  border-color: #e9ecef;
-  color: #999;
+  background-color: var(--bg-secondary);
+  border-color: var(--accent-teal);
+  color: var(--text-muted);
 }
 
 .form-check {
@@ -168,8 +168,8 @@
 }
 
 .form-check-input:checked {
-  background-color: #0066cc;
-  border-color: #0066cc;
+  background-color: var(--primary-action);
+  border-color: var(--primary-action);
 }
 
 .form-check-label {
@@ -187,13 +187,14 @@
 }
 
 .btn-primary {
-  background-color: #0066cc;
-  border-color: #0066cc;
+  background-color: var(--primary-action);
+  border-color: var(--primary-action);
+  color: var(--text-white);
 }
 
 .btn-primary:hover:not(:disabled) {
-  background-color: #0052a3;
-  border-color: #0052a3;
+  background-color: var(--accent-teal);
+  border-color: var(--accent-teal);
   transform: translateY(-2px);
   box-shadow: 0 4px 12px rgba(0, 102, 204, 0.3);
 }
@@ -204,13 +205,13 @@
 }
 
 .btn-outline-primary {
-  color: #0066cc;
-  border-color: #0066cc;
+  color: var(--primary-action);
+  border-color: var(--primary-action);
 }
 
 .btn-outline-primary:hover {
-  background-color: #0066cc;
-  border-color: #0066cc;
+  background-color: var(--primary-action);
+  border-color: var(--primary-action);
 }
 
 .btn-outline-danger {
@@ -231,18 +232,18 @@
 /* Security Section */
 .security-section {
   padding: 15px;
-  background-color: #f8f9fa;
+  background-color: var(--bg-secondary);
   border-radius: 6px;
 }
 
 .security-section h5 {
-  color: #333;
+  color: var(--text-light);
   font-weight: 600;
   margin-bottom: 15px;
 }
 
 .session-info {
-  background: white;
+  background: var(--bg-secondary);
   padding: 15px;
   border-radius: 6px;
   border-left: 4px solid #28a745;
@@ -255,44 +256,44 @@
 }
 
 .table thead {
-  background-color: #f8f9fa;
-  border-bottom: 2px solid #ddd;
+  background-color: var(--bg-secondary);
+  border-bottom: 2px solid var(--accent-teal);
 }
 
 .table th {
-  color: #666;
+  color: var(--text-muted);
   font-weight: 600;
   padding: 12px;
 }
 
 .table td {
   padding: 12px;
-  border-bottom: 1px solid #e9ecef;
+  border-bottom: 1px solid var(--accent-teal);
 }
 
 .table tbody tr:hover {
-  background-color: #f8f9fa;
+  background-color: var(--bg-secondary);
 }
 
 /* Alerts */
 .alert-info {
-  background-color: #d1ecf1;
-  border-color: #bee5eb;
-  color: #0c5460;
+  background-color: rgba(112, 119, 147, 0.12);
+  border-color: rgba(112, 119, 147, 0.35);
+  color: var(--text-light);
 }
 
 .alert-info strong {
-  color: #0c5460;
+  color: var(--text-light);
 }
 
 .alert-warning {
-  background-color: #fff3cd;
-  border-color: #ffeaa7;
-  color: #856404;
+  background-color: rgba(255, 184, 77, 0.12);
+  border-color: rgba(255, 184, 77, 0.35);
+  color: var(--warning);
 }
 
 .alert-warning strong {
-  color: #856404;
+  color: var(--warning);
 }
 
 /* Badges */
@@ -373,13 +374,13 @@
 }
 
 .text-muted {
-  color: #999;
+  color: var(--text-muted);
   font-size: 0.9rem;
 }
 
 hr {
   border: none;
-  border-top: 1px solid #e9ecef;
+  border-top: 1px solid var(--accent-teal);
   margin: 20px 0;
 }
 
@@ -417,6 +418,6 @@ ul li {
 
   .settings-card {
     box-shadow: none;
-    border: 1px solid #ddd;
+    border: 1px solid var(--accent-teal);
   }
 }

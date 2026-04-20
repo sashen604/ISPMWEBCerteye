@@ -33,22 +33,22 @@ function AdminLayout() {
   }
 
   return (
-    <div className="d-flex">
-      <aside className="sidebar p-3">
-        <div className="mb-4">
-          <h4 className="fw-bold">🔐 CertEye</h4>
-          <small className="text-muted">
+    <div className="admin-shell">
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <h4 className="sidebar-brand-title">🔐 CertEye</h4>
+          <small className="sidebar-brand-subtitle">
             {loading ? 'Loading...' : user?.role_display || 'Console'}
           </small>
         </div>
         <nav className="nav flex-column gap-1">
-          <NavLink className="nav-link" to="/dashboard">📊 Dashboard</NavLink>
+          <NavLink className="nav-link" to="/dashboard">🛡️ Dashboard</NavLink>
           <NavLink className="nav-link" to="/dashboard/certificates">🔒 Certificates</NavLink>
-          <NavLink className="nav-link" to="/dashboard/scan">🔍 Scan Domain</NavLink>
-          <NavLink className="nav-link" to="/dashboard/export">📋 Export & Reports</NavLink>
-          <NavLink className="nav-link" to="/dashboard/internal-certificates">🏢 Internal Certs</NavLink>
+          <NavLink className="nav-link" to="/dashboard/internal-certificates">🏢 Internal Certificates</NavLink>
           <NavLink className="nav-link" to="/dashboard/alerts">⚠️ Alerts</NavLink>
-          <NavLink className="nav-link" to="/dashboard/alerts-generator">⚡ Generate Alerts</NavLink>
+          <NavLink className="nav-link" to="/dashboard/alerts-generator">⚡ Alert Generator</NavLink>
+          <NavLink className="nav-link" to="/dashboard/scan">🔍 Scan Domain</NavLink>
+          <NavLink className="nav-link" to="/dashboard/export">📋 Reports</NavLink>
           <NavLink className="nav-link" to="/dashboard/internal-alerts">🔔 Internal Alerts</NavLink>
           <NavLink className="nav-link" to="/dashboard/internal-alerts-history">📜 Alert History</NavLink>
           {user?.is_superadmin && (
@@ -61,11 +61,11 @@ function AdminLayout() {
           <NavLink className="nav-link" to="/dashboard/settings">⚙️ Settings</NavLink>
         </nav>
       </aside>
-      <div className="flex-grow-1">
-        <header className="topbar px-4 py-3 d-flex justify-content-between align-items-center">
+      <div className="admin-main">
+        <header className="topbar">
           <div>
-            <h5 className="mb-0">SSL Certificate Lifecycle Management</h5>
-            <small className="text-muted">
+            <h5 className="topbar-title">SSL Certificate Lifecycle Management</h5>
+            <small className="topbar-subtitle">
               {user ? `${user.username} (${user.role_display})` : 'Monitor and secure certificate health'}
             </small>
           </div>

@@ -1,21 +1,8 @@
 /* Admin Panel Styles - Metallic Chic Blue Theme */
 
-:root {
-  --primary-blue: #3d52a0;
-  --primary-blue-light: #5b7cc4;
-  --accent-blue: #7091e6;
-  --soft-purple: #a8b8e6;
-  --neutral-gray: #d0d5e0;
-  --metallic-dark: #1a1f3a;
-  --metallic-light: #f5f7fa;
-  --white: #ffffff;
-  --text-dark: #2d3e5f;
-  --text-light: #8b95a5;
-}
-
 .admin-panel-container {
   padding: 2rem;
-  background: linear-gradient(135deg, #f5f7fa 0%, #e8ecf5 25%, #dce2f0 50%, #e3eaf8 75%, #f0f2f8 100%);
+  background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 25%, var(--bg-tertiary) 50%, var(--bg-tertiary) 75%, var(--bg-tertiary) 100%);
   min-height: 100vh;
 }
 
@@ -64,7 +51,7 @@
 
 /* Users Section */
 .users-section {
-  background: var(--white);
+  background: var(--bg-secondary);
   border: 1px solid var(--neutral-gray);
   border-radius: 12px;
   padding: 1.5rem;
@@ -131,7 +118,7 @@
 }
 
 .btn-close:hover {
-  color: #ff006e;
+  color: var(--warning-alert);
 }
 
 /* Users List */
@@ -210,12 +197,12 @@
   font-size: 0.8rem;
   font-weight: 600;
   background: rgba(0, 245, 255, 0.15);
-  color: #00f5ff;
+  color: var(--primary-action);
 }
 
 /* User Detail Section */
 .user-detail-section {
-  background: var(--white);
+  background: var(--bg-secondary);
   border: 1px solid var(--neutral-gray);
   border-radius: 12px;
   padding: 1.5rem;
@@ -298,7 +285,7 @@
 }
 
 .form-control option {
-  background: var(--white);
+  background: var(--bg-secondary);
   color: var(--text-dark);
 }
 
@@ -315,7 +302,7 @@
 
 .btn-primary {
   background: linear-gradient(135deg, var(--primary-blue) 0%, var(--primary-blue-light) 100%);
-  color: var(--white);
+  color: var(--text-white);
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -329,8 +316,8 @@
 }
 
 .btn-danger {
-  background: linear-gradient(135deg, #ff006e 0%, #ff6b9d 100%);
-  color: var(--white);
+  background: linear-gradient(135deg, var(--warning-alert) 0%, var(--warning-alert) 100%);
+  color: var(--text-white);
   width: 100%;
 }
 
