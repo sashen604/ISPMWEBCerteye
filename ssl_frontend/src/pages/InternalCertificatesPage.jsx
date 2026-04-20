@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import api from '../api'
+import InternalCertificateIngestionForm from '../components/InternalCertificateIngestionForm'
 import '../styles/admin-panel.css'
 
 function InternalCertificatesPage() {
@@ -238,6 +239,8 @@ function InternalCertificatesPage() {
             🔄 Refresh
           </button>
         </div>
+
+        <InternalCertificateIngestionForm onSuccess={loadInternalCertificates} />
 
         {/* Error Message */}
         {error && (

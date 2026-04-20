@@ -157,7 +157,7 @@ class ADCSSourceViewSet(viewsets.ModelViewSet):
         # Get sync history for this source
         history = ADCSSyncHistory.objects.filter(
             source=source
-        ).order_by('-created_at')[offset:offset+limit]
+        ).order_by('-started_at')[offset:offset+limit]
         
         serializer = ADCSSyncHistorySerializer(history, many=True)
         

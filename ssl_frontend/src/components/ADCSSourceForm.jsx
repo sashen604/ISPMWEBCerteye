@@ -36,7 +36,7 @@ const ADCSSourceForm = () => {
 
   const loadSources = async () => {
     try {
-      const response = await api.get('/certificates/adcs-sources/');
+      const response = await api.get('/api/certificates/adcs-sources/');
       setSources(response.data.results || response.data);
     } catch (error) {
       console.error('Failed to load sources:', error);
@@ -46,7 +46,7 @@ const ADCSSourceForm = () => {
   const loadSyncHistory = async (sourceId) => {
     try {
       const response = await api.get(
-        `/certificates/adcs-sources/${sourceId}/sync_history/?limit=10`
+        `/api/certificates/adcs-sources/${sourceId}/sync_history/?limit=10`
       );
       setSyncHistory(response.data.results || []);
     } catch (error) {
@@ -68,7 +68,7 @@ const ADCSSourceForm = () => {
     setMessage({ type: '', text: '' });
 
     try {
-      const response = await api.post('/certificates/adcs-sources/', formData);
+      const response = await api.post('/api/certificates/adcs-sources/', formData);
       setMessage({
         type: 'success',
         text: `AD CS source "${response.data.source_name}" registered successfully!`,
@@ -107,7 +107,7 @@ const ADCSSourceForm = () => {
 
     try {
       const response = await api.post(
-        `/certificates/adcs-sources/${sourceId}/test_connection/`
+        `/api/certificates/adcs-sources/${sourceId}/test_connection/`
       );
       setTestResults(response.data);
       setMessage({
@@ -134,7 +134,7 @@ const ADCSSourceForm = () => {
 
     try {
       const response = await api.post(
-        `/certificates/adcs-sources/${sourceId}/sync/`
+        `/api/certificates/adcs-sources/${sourceId}/sync/`
       );
       setSyncResults(response.data);
       setMessage({
@@ -151,6 +151,42 @@ const ADCSSourceForm = () => {
       setMessage({
         type: 'error',
         text: 'Sync failed',
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteSource = async (source) => {
+    const confirmed = window.confirm(
+      `Remove AD CS source "${source.source_name}"? This cannot be undone.`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setLoading(true);
+    setMessage({ type: '', text: '' });
+
+    try {
+      await api.delete(`/api/certificates/adcs-sources/${source.id}/`);
+
+      if (selectedSource?.id === source.id) {
+        setSelectedSource(null);
+        setSyncHistory([]);
+        setTestResults(null);
+        setSyncResults(null);
+      }
+
+      setMessage({
+        type: 'success',
+        text: `AD CS source "${source.source_name}" removed successfully.`,
+      });
+      loadSources();
+    } catch (error) {
+      setMessage({
+        type: 'error',
+        text: `Failed to remove AD CS source: ${error.response?.data?.detail || error.message}`,
       });
     } finally {
       setLoading(false);
@@ -454,6 +490,16 @@ const ADCSSourceForm = () => {
                       disabled={loading}
                     >
                       Sync Now
+                    </button>
+                    <button
+                      className="btn btn-sm btn-danger"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteSource(source);
+                      }}
+                      disabled={loading}
+                    >
+                      Remove
                     </button>
                   </div>
                 </div>

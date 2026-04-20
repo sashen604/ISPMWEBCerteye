@@ -68,7 +68,7 @@ function HomePage() {
           ) : (
             <>
               <button 
-                className="btn btn-secondary"
+                className="btn btn-primary"
                 onClick={() => navigate('/login')}
               >
                 Sign In

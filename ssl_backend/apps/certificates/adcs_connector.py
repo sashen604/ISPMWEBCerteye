@@ -5,10 +5,14 @@ Supports WinRM, LDAP, and agent-based collection.
 
 import logging
 import json
-import subprocess
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from django.utils import timezone
+
+try:
+    import winrm
+except Exception:
+    winrm = None
 
 logger = logging.getLogger(__name__)
 
@@ -42,122 +46,223 @@ class WinRMConnector(ADCSConnector):
     Falls back to subprocess for local testing.
     """
     
-    def __init__(self, source):
+    def __init__(self, source, password: Optional[str] = None):
         super().__init__(source)
-        self.protocol = None
+        self.session = None
+        self.password = password
+
+    def _build_username(self) -> str:
+        username = self.source.username or ''
+        if '\\' in username or '@' in username:
+            return username
+        domain = (self.source.domain or '').strip()
+        if domain:
+            return f"{domain}\\{username}"
+        return username
+
+    def _candidate_usernames(self) -> List[str]:
+        raw_username = (self.source.username or '').strip()
+        if not raw_username:
+            return ['']
+
+        candidates = [raw_username]
+        domain = (self.source.domain or '').strip()
+
+        if '\\' in raw_username:
+            base_username = raw_username.split('\\')[-1]
+        elif '@' in raw_username:
+            base_username = raw_username.split('@')[0]
+        else:
+            base_username = raw_username
+
+        if domain:
+            domain_netbios = domain.split('.')[0]
+            candidates.append(f"{domain}\\{base_username}")
+            candidates.append(f"{domain_netbios}\\{base_username}")
+            candidates.append(f"{base_username}@{domain}")
+
+        candidates.append(base_username)
+
+        deduped = []
+        for candidate in candidates:
+            if candidate and candidate not in deduped:
+                deduped.append(candidate)
+        return deduped
+
+    def _endpoint(self) -> str:
+        scheme = 'https' if self.source.use_ssl else 'http'
+        return f"{scheme}://{self.source.server_hostname}:{self.source.port}/wsman"
+
+    def _create_session(self):
+        if winrm is None:
+            raise RuntimeError('pywinrm is not installed. Install pywinrm and requests-ntlm')
+        if not self.password:
+            raise RuntimeError('Missing decrypted password for WinRM connection')
+
+        transport = 'ntlm'
+        server_cert_validation = 'validate' if self.source.verify_ssl else 'ignore'
+
+        last_error = None
+        for username in self._candidate_usernames():
+            try:
+                session = winrm.Session(
+                    target=self._endpoint(),
+                    auth=(username, self.password),
+                    transport=transport,
+                    server_cert_validation=server_cert_validation,
+                )
+                probe = session.run_ps('Write-Output "WINRM_AUTH_OK"')
+                stdout = (probe.std_out or b'').decode(errors='ignore')
+                if probe.status_code == 0 and 'WINRM_AUTH_OK' in stdout:
+                    logger.info(f"WinRM authenticated using username format: {username}")
+                    return session
+                last_error = RuntimeError(
+                    f"Authentication probe failed for {username}: status={probe.status_code}"
+                )
+            except Exception as exc:
+                last_error = exc
+
+        if last_error:
+            raise last_error
+        raise RuntimeError('Unable to establish WinRM session')
+
+    def _run_adcs_presence_check(self) -> Tuple[bool, str]:
+        ca_name = (self.source.ca_name or '').strip()
+        escaped_ca_name = ca_name.replace("'", "''")
+
+        ps_command = f"""
+$ErrorActionPreference = 'Continue'
+$result = [ordered]@{{
+  success = $false
+  method = ''
+  message = ''
+}}
+
+try {{
+  Import-Module ADCSAdministration -ErrorAction Stop
+  if (Get-Command Get-CertificationAuthority -ErrorAction SilentlyContinue) {{
+    $cas = Get-CertificationAuthority -ErrorAction Stop
+    if ($cas) {{
+      if ('{escaped_ca_name}' -ne '') {{
+        $matched = $cas | Where-Object {{ $_.Name -eq '{escaped_ca_name}' -or $_.DisplayName -eq '{escaped_ca_name}' }}
+        if ($matched) {{
+          $result.success = $true
+          $result.method = 'adcs_cmdlet'
+          $result.message = 'ADCS cmdlet succeeded and CA matched'
+        }} else {{
+          $result.success = $true
+          $result.method = 'adcs_cmdlet'
+          $result.message = 'ADCS cmdlet succeeded (CA name not explicitly matched)'
+        }}
+      }} else {{
+        $result.success = $true
+        $result.method = 'adcs_cmdlet'
+        $result.message = 'ADCS cmdlet succeeded'
+      }}
+    }}
+  }}
+}} catch {{
+  $result.message = $_.Exception.Message
+}}
+
+if (-not $result.success) {{
+  if ('{escaped_ca_name}' -ne '') {{
+    $pingOutput = certutil -config '{escaped_ca_name}' -ping 2>&1 | Out-String
+  }} else {{
+    $pingOutput = certutil -ping 2>&1 | Out-String
+  }}
+
+  if ($LASTEXITCODE -eq 0 -and $pingOutput -notmatch 'FAILED') {{
+    $result.success = $true
+    $result.method = 'certutil_ping'
+    $result.message = 'certutil ping succeeded'
+  }} else {{
+    $result.success = $false
+    $result.method = 'certutil_ping'
+    $result.message = $pingOutput
+  }}
+}}
+
+$result | ConvertTo-Json -Compress
+        """
+
+        result = self.session.run_ps(ps_command)
+        stdout = (result.std_out or b'').decode(errors='ignore').strip()
+        stderr = (result.std_err or b'').decode(errors='ignore').strip()
+
+        if result.status_code != 0:
+            return False, f"AD CS detection command failed ({result.status_code}): {stderr or stdout or 'no output'}"
+
+        try:
+            parsed = json.loads(stdout)
+        except Exception:
+            return False, f"Unable to parse AD CS detection output: {stdout or stderr or 'empty output'}"
+
+        success = bool(parsed.get('success'))
+        method = parsed.get('method') or 'unknown'
+        message = (parsed.get('message') or '').strip()
+
+        if success:
+            return True, f"AD CS reachable via {method}: {message}"
+        return False, f"AD CS check failed via {method}: {message or 'no details'}"
     
     def test_connection(self) -> Tuple[bool, str]:
         """
-        Test connectivity and AD CS presence.
+        Test connectivity and AD CS presence using remote WinRM.
+        Falls back to certutil ping when ADCS cmdlets are unavailable.
         """
         try:
-            # PowerShell script to check for AD CS
-            ps_command = """
-$CertService = Get-Service -Name certsvc -ErrorAction SilentlyContinue
-if ($CertService) {
-    Write-Output "AD Certificate Services is installed"
-    Write-Output "Status: $($CertService.Status)"
-    exit 0
-} else {
-    Write-Output "AD Certificate Services is not installed"
-    exit 1
-}
-            """
-            
-            # For development: try to execute PowerShell script locally
-            result = subprocess.run(
-                ['powershell', '-Command', ps_command],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            
-            if result.returncode == 0 and "installed" in result.stdout:
+            self.session = self._create_session()
+            success, adcs_message = self._run_adcs_presence_check()
+
+            if success:
                 logger.info(f"AD CS connection test successful: {self.source.server_hostname}")
-                return True, "Successfully connected to AD CS server"
-            else:
-                return False, f"AD CS not found or not accessible"
-                
-        except subprocess.TimeoutExpired:
-            logger.error(f"Connection test timeout to {self.source.server_hostname}")
-            return False, "Connection test timed out"
-        except FileNotFoundError:
-            logger.warning("PowerShell not found - attempting mock test")
-            # For non-Windows environments, allow manual mock testing
-            return True, "AD CS test mode (PowerShell not available)"
+                return True, f"WinRM connected. {adcs_message}"
+
+            return False, f"WinRM connected, but {adcs_message}"
         except Exception as e:
             logger.error(f"Connection test failed: {str(e)}")
             return False, f"Connection failed: {str(e)}"
     
     def fetch_certificates(self) -> List[Dict]:
         """
-        Fetch certificates from AD CS using PowerShell.
+        Fetch certificates from AD CS using remote WinRM + PowerShell.
         """
         try:
-            # PowerShell script to fetch AD CS certificates
-            ps_script = f"""
-# Mock certificate data for testing
-$Certificates = @(
-    @{{
-        Subject = "CN=web01.example.com"
-        Issuer = "CN=Example-CA,DC=example,DC=com"
-        Thumbprint = "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0"
-        SerialNumber = "01 00 00 00 00 00 00 01"
-        ValidFrom = (Get-Date).AddYears(-1)
-        ValidTo = (Get-Date).AddYears(1)
-        KeyLength = 2048
-        SignatureAlgorithm = "sha256WithRSAEncryption"
-        Template = "WebServer"
-        Requester = "CORP\\\\administrator"
-    }}
-)
+            if self.session is None:
+                self.session = self._create_session()
 
-$Certificates | ConvertTo-Json
+            ps_script = r"""
+$certs = Get-ChildItem -Path Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Select-Object \
+  Subject,Issuer,Thumbprint,SerialNumber,NotBefore,NotAfter,@{Name='KeyLength';Expression={$_.PublicKey.Key.KeySize}},@{Name='SignatureAlgorithm';Expression={$_.SignatureAlgorithm.FriendlyName}}
+
+if ($certs) {
+  $certs | ConvertTo-Json -Depth 4
+} else {
+  Write-Output "[]"
+}
             """
-            
-            result = subprocess.run(
-                ['powershell', '-Command', ps_script],
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
-            
-            if result.returncode == 0 and result.stdout:
-                certificates = json.loads(result.stdout)
-                return certificates if isinstance(certificates, list) else [certificates]
-            else:
-                logger.warning(f"PowerShell fetch returned code {result.returncode}: {result.stderr}")
+
+            result = self.session.run_ps(ps_script)
+            stdout = (result.std_out or b'').decode(errors='ignore').strip()
+            stderr = (result.std_err or b'').decode(errors='ignore').strip()
+
+            if result.status_code != 0:
+                logger.warning(f"WinRM certificate fetch failed ({result.status_code}): {stderr or stdout}")
                 return []
-            
-        except FileNotFoundError:
-            logger.info("PowerShell not available - returning mock data")
-            # Return mock data for development/testing
-            return [
-                {
-                    "Subject": "CN=mock-server.example.com",
-                    "Issuer": "CN=Example-CA,DC=example,DC=com",
-                    "Thumbprint": "MOCKA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9",
-                    "SerialNumber": "01 00 00 00 00 00 00 02",
-                    "ValidFrom": timezone.now().isoformat(),
-                    "ValidTo": (timezone.now() + timezone.timedelta(days=365)).isoformat(),
-                    "KeyLength": 2048,
-                    "SignatureAlgorithm": "sha256WithRSAEncryption",
-                    "Template": "WebServer",
-                    "Requester": "CORP\\\\administrator"
-                }
-            ]
+
+            if not stdout:
+                return []
+
+            certificates = json.loads(stdout)
+            return certificates if isinstance(certificates, list) else [certificates]
         except Exception as e:
             logger.error(f"Failed to fetch certificates: {str(e)}")
             return []
     
     def close(self):
         """Close WinRM connection."""
-        if self.protocol:
-            try:
-                self.protocol.close()
-            except:
-                pass
-            self.protocol = None
+        self.session = None
 
 
 class LDAPConnector(ADCSConnector):
@@ -222,12 +327,12 @@ class ADCSConnectorFactory:
     """
     
     @staticmethod
-    def create_connector(source) -> ADCSConnector:
+    def create_connector(source, password: Optional[str] = None) -> ADCSConnector:
         """
         Create connector instance based on source auth_type.
         """
         if source.auth_type == 'winrm':
-            return WinRMConnector(source)
+            return WinRMConnector(source, password=password)
         elif source.auth_type == 'ldap':
             return LDAPConnector(source)
         elif source.auth_type == 'agent':

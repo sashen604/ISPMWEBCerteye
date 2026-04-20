@@ -140,7 +140,7 @@ class ADCSSyncHistorySerializer(serializers.ModelSerializer):
             'sync_details',
             'error_message',
             'completed_at',
-            'created_at'
+            'started_at'
         ]
         read_only_fields = [
             'id',
@@ -152,5 +152,5 @@ class ADCSSyncHistorySerializer(serializers.ModelSerializer):
             'sync_details',
             'error_message',
             'completed_at',
-            'created_at'
+            'started_at'
         ]

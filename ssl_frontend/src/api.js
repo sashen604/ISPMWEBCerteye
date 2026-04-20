@@ -17,9 +17,17 @@ api.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401) {
-      console.warn('[API] 401 Unauthorized - Token may be invalid or expired')
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('refresh_token')
+      const requestUrl = error.config?.url || ''
+      const isAgentIngestionEndpoint = requestUrl.includes('/api/certificates/collect_internal/')
+      const hadAuthHeader = Boolean(error.config?.headers?.Authorization)
+
+      if (isAgentIngestionEndpoint) {
+        console.warn('[API] 401 from agent ingestion endpoint - preserving user auth tokens')
+      } else if (hadAuthHeader) {
+        console.warn('[API] 401 Unauthorized - Token may be invalid or expired')
+        localStorage.removeItem('access_token')
+        localStorage.removeItem('refresh_token')
+      }
     }
     return Promise.reject(error)
   }

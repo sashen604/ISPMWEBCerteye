@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Dict, List, Tuple, Optional
 from django.utils import timezone
 from django.db import transaction
+from django.utils.dateparse import parse_datetime
 
 from .models_adcs import (
     ADCSSource, ADCSSyncHistory, ADCSConnectionTest, ADCSCertificate
@@ -42,7 +43,7 @@ class ADCSIntegrationService:
                 }
             
             # Create connector and test
-            connector = ADCSConnectorFactory.create_connector(source)
+            connector = ADCSConnectorFactory.create_connector(source, password=password)
             success, message = connector.test_connection()
             connector.close()
             
@@ -68,13 +69,18 @@ class ADCSIntegrationService:
             
             # Audit log
             if user:
-                from audit_logs.services import AuditLoggingService
+                from apps.audit_logs.services import AuditLoggingService
                 AuditLoggingService.log_action(
-                    action='adcs_connection_test',
                     user=user,
-                    description=f"Tested AD CS connection: {source.source_name}",
-                    ip_address=ip_address,
-                    details={'source_id': source.id, 'success': success}
+                    action='adcs_connection_test',
+                    target_type='adcs_source',
+                    target_id=source.id,
+                    details={
+                        'source_name': source.source_name,
+                        'description': f"Tested AD CS connection: {source.source_name}",
+                        'ip_address': ip_address,
+                        'success': success,
+                    },
                 )
             
             logger.info(f"AD CS connection test {'successful' if success else 'failed'}: {source.source_name}")
@@ -135,7 +141,7 @@ class ADCSIntegrationService:
                 }
             
             # Create connector and fetch certificates
-            connector = ADCSConnectorFactory.create_connector(source)
+            connector = ADCSConnectorFactory.create_connector(source, password=password)
             certificates = connector.fetch_certificates()
             connector.close()
             
@@ -180,13 +186,16 @@ class ADCSIntegrationService:
             
             # Audit log
             if user:
-                from audit_logs.services import AuditLoggingService
+                from apps.audit_logs.services import AuditLoggingService
                 AuditLoggingService.log_action(
-                    action='adcs_sync_completed',
                     user=user,
-                    description=f"Synced AD CS certificates from {source.source_name}",
-                    ip_address=ip_address,
+                    action='adcs_sync_completed',
+                    target_type='adcs_source',
+                    target_id=source.id,
                     details={
+                        'source_name': source.source_name,
+                        'description': f"Synced AD CS certificates from {source.source_name}",
+                        'ip_address': ip_address,
                         'source_id': source.id,
                         'sync_history_id': sync_history.id,
                         'stats': stats
@@ -240,18 +249,61 @@ class ADCSIntegrationService:
             thumbprint = cert_data.get('Thumbprint', '').replace(' ', '')
             issuer = cert_data.get('Issuer', '')
             serial_number = cert_data.get('SerialNumber', '')
+            signature_algorithm = cert_data.get('SignatureAlgorithm', 'Unknown') or 'Unknown'
+
+            key_length_raw = cert_data.get('KeyLength', 2048)
+            try:
+                key_length = int(key_length_raw) if key_length_raw is not None else 2048
+            except (TypeError, ValueError):
+                key_length = 2048
+
+            valid_from = ADCSIntegrationService._parse_datetime(cert_data.get('NotBefore'))
+            valid_to = ADCSIntegrationService._parse_datetime(cert_data.get('NotAfter'))
+            now = timezone.now()
+            days_remaining = max(0, (valid_to - now).days)
+
+            domain = ADCSIntegrationService._extract_primary_name(subject)
+            risk_level, risk_score, risk_reasoning = ADCSIntegrationService._calculate_risk_fields(
+                valid_to=valid_to,
+                key_length=key_length,
+                issuer=issuer,
+                subject=subject,
+                signature_algorithm=signature_algorithm,
+            )
             
             if not subject or not thumbprint:
                 logger.warning("Certificate missing subject or thumbprint")
                 stats['certificates_failed'] += 1
                 return
+
+            cert_defaults = {
+                'domain': domain,
+                'hostname': source.server_hostname,
+                'certificate_type': 'single',
+                'issuer': issuer,
+                'subject': subject,
+                'serial_number': serial_number or thumbprint[:64],
+                'signature_algorithm': signature_algorithm,
+                'key_length': key_length,
+                'valid_from': valid_from,
+                'valid_to': valid_to,
+                'days_remaining': days_remaining,
+                'risk_level': risk_level,
+                'risk_score': risk_score,
+                'risk_reasoning': risk_reasoning,
+                'source_type': 'adcs',
+                'status': 'active' if valid_to > now else 'expired',
+                'template_name': cert_data.get('Template', '') or '',
+                'last_scanned': now,
+                'is_self_signed': issuer.strip() == subject.strip(),
+            }
             
             # Check if certificate already exists
             try:
                 cert = Certificate.objects.get(thumbprint=thumbprint)
                 # Update existing certificate
-                cert.common_name = subject.replace('CN=', '').split(',')[0]
-                cert.issuer = issuer
+                for field_name, field_value in cert_defaults.items():
+                    setattr(cert, field_name, field_value)
                 cert.save()
                 stats['certificates_updated'] += 1
                 stats['imported_thumbprints'].append(thumbprint)
@@ -262,13 +314,8 @@ class ADCSIntegrationService:
             
             # Create new certificate
             cert = Certificate.objects.create(
-                common_name=subject.replace('CN=', '').split(',')[0],
-                subject=subject,
-                issuer=issuer,
                 thumbprint=thumbprint,
-                serial_number=serial_number,
-                status='active',
-                source='ad_cs'
+                **cert_defaults,
             )
             
             # Create AD CS specific metadata
@@ -305,26 +352,77 @@ class ADCSIntegrationService:
         Calculate and assign risk score to certificate.
         """
         try:
-            from risk_engine.services import RiskScoringEngine
-            
-            # Build certificate info for risk scoring
-            cert_info = {
-                'common_name': cert.common_name,
-                'thumbprint': cert.thumbprint,
-                'issuer': cert.issuer,
-                'days_until_expiry': 365,  # Could calculate from cert_data
-                'key_length': cert_data.get('KeyLength', 2048),
-                'signature_algorithm': cert_data.get('SignatureAlgorithm', '')
-            }
-            
-            risk_score = RiskScoringEngine.calculate_risk_score(cert_info)
-            cert.risk_level = risk_score['risk_level']
-            cert.risk_score = risk_score['risk_score']
-            cert.risk_reasoning = risk_score.get('reasoning', {})
+            risk_level, risk_score, risk_reasoning = ADCSIntegrationService._calculate_risk_fields(
+                valid_to=cert.valid_to,
+                key_length=cert_data.get('KeyLength') or cert.key_length,
+                issuer=cert.issuer,
+                subject=cert.subject,
+                signature_algorithm=cert_data.get('SignatureAlgorithm') or cert.signature_algorithm,
+            )
+            cert.risk_level = risk_level
+            cert.risk_score = risk_score
+            cert.risk_reasoning = risk_reasoning
             cert.save()
             
-            logger.info(f"Risk score calculated for {cert.common_name}: {risk_score['risk_level']}")
+            logger.info(f"Risk score calculated for {cert.domain}: {risk_level}")
         
         except Exception as e:
             logger.error(f"Failed to calculate risk score: {str(e)}")
             # Don't fail the entire certificate import if risk scoring fails
+
+    @staticmethod
+    def _parse_datetime(raw_value) -> datetime:
+        if isinstance(raw_value, datetime):
+            dt = raw_value
+        else:
+            dt = parse_datetime(str(raw_value)) if raw_value else None
+
+        if dt is None:
+            dt = timezone.now()
+
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt, timezone.get_current_timezone())
+        return dt
+
+    @staticmethod
+    def _extract_primary_name(subject: str) -> str:
+        if not subject:
+            return 'unknown.local'
+
+        for part in subject.split(','):
+            item = part.strip()
+            if item.upper().startswith('CN='):
+                return item[3:].strip() or 'unknown.local'
+
+        return subject.strip() or 'unknown.local'
+
+    @staticmethod
+    def _calculate_risk_fields(
+        valid_to: datetime,
+        key_length,
+        issuer: str,
+        subject: str,
+        signature_algorithm: str,
+    ) -> Tuple[str, int, Dict]:
+        from apps.risk_engine.services import RiskScoringEngine
+
+        try:
+            key_length_int = int(key_length)
+        except (TypeError, ValueError):
+            key_length_int = 2048
+
+        is_self_signed = (issuer or '').strip() == (subject or '').strip()
+        score = RiskScoringEngine.calculate_risk_score(
+            valid_to=valid_to,
+            key_length=key_length_int,
+            is_self_signed=is_self_signed,
+            algorithm=signature_algorithm,
+        )
+        level = RiskScoringEngine.determine_risk_level(score)
+        reasoning = RiskScoringEngine.get_risk_reasoning(
+            valid_to=valid_to,
+            key_length=key_length_int,
+            is_self_signed=is_self_signed,
+            algorithm=signature_algorithm,
+        )
+        return level, score, reasoning
