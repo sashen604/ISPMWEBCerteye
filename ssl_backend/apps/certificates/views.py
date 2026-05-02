@@ -21,7 +21,11 @@ from .serializers import (
     InternalCertificateBatchResponseSerializer
 )
 from .services import CertificateFetchService
-from .internal_service import InternalCertificateService, InternalCertificateError
+from .internal_service import (
+    InternalCertificateService,
+    InternalCertificateError,
+    refresh_stored_internal_certificate,
+)
 from .agent_auth import CertificateAgent, AgentAuditLog, AgentRateLimiter
 from apps.audit_logs.services import AuditLoggingService
 from apps.authentication.permissions import IsAdminOrReadOnly, IsAdminOrSuperAdmin
@@ -171,7 +175,82 @@ class CertificateViewSet(viewsets.ModelViewSet):
             pass
         
         return super().destroy(request, *args, **kwargs)
-    
+
+    @action(detail=True, methods=['post'], url_path='acknowledge', permission_classes=[IsAuthenticated])
+    def acknowledge(self, request, pk=None):
+        """Mark an internal-agent certificate as reviewed (sets acknowledged_at)."""
+        certificate = self.get_object()
+        if certificate.source_type != 'internal_agent':
+            return Response(
+                {
+                    'success': False,
+                    'detail': 'Acknowledgement is only supported for internal-agent certificates.',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        certificate.acknowledged_at = timezone.now()
+        certificate.save()
+        
+        # Log audit event
+        try:
+            AuditLoggingService.log_action(
+                user=request.user,
+                action='CERTIFICATE_ACKNOWLEDGED',
+                resource_type='Certificate',
+                resource_id=certificate.id,
+                details={'certificate_domain': certificate.domain, 'acknowledged_at': str(certificate.acknowledged_at)},
+                ip_address=self._get_client_ip(request)
+            )
+        except Exception:
+            pass  # Don't fail the request if audit logging fails
+        
+        return Response(
+            {
+                'success': True,
+                'message': 'Certificate acknowledged.',
+                'certificate': self.get_serializer(certificate).data,
+            }
+        )
+
+    @action(detail=True, methods=['post'], url_path='rescan', permission_classes=[IsAuthenticated, IsAdminOrReadOnly])
+    def rescan(self, request, pk=None):
+        """
+        Refresh metrics from stored fields (days left, risk, last_scanned / last_verified).
+        Does not contact the Windows host; re-submit from an agent for a full refresh.
+        """
+        certificate = self.get_object()
+        if certificate.source_type != 'internal_agent':
+            return Response(
+                {
+                    'success': False,
+                    'detail': 'Rescan is only supported for internal-agent certificates.',
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        refresh_stored_internal_certificate(certificate)
+        certificate.refresh_from_db()
+        
+        # Log audit event
+        try:
+            AuditLoggingService.log_action(
+                user=request.user,
+                action='CERTIFICATE_RESCANNED',
+                resource_type='Certificate',
+                resource_id=certificate.id,
+                details={'certificate_domain': certificate.domain, 'last_scanned': str(certificate.last_scanned)},
+                ip_address=self._get_client_ip(request)
+            )
+        except Exception:
+            pass  # Don't fail the request if audit logging fails
+        
+        return Response(
+            {
+                'success': True,
+                'message': 'Certificate metrics refreshed.',
+                'certificate': self.get_serializer(certificate).data,
+            }
+        )
+
     @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminOrSuperAdmin])
     def scan_batch(self, request):
         """
@@ -560,6 +639,7 @@ class CertificateViewSet(viewsets.ModelViewSet):
             'by_source_type': {
                 'scanner': Certificate.objects.filter(source_type='scanner').count(),
                 'internal_agent': Certificate.objects.filter(source_type='internal_agent').count(),
+                'adcs': Certificate.objects.filter(source_type='adcs').count(),
             },
             'expiration_stats': {
                 'expired': Certificate.objects.filter(valid_to__lt=now).count(),

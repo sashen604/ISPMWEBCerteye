@@ -1,12 +1,17 @@
 import { useState, useEffect } from 'react'
 import api from '../api'
+import { certificateActionsApi } from '../api'
 import InternalCertificateIngestionForm from '../components/InternalCertificateIngestionForm'
+import CertificateActionsCell from '../components/CertificateActionsCell'
+import { useNotification, NotificationContainer } from '../hooks/useNotification.jsx'
 import '../styles/admin-panel.css'
 
 function InternalCertificatesPage() {
+  const { notifications, addSuccess, addError, removeNotification } = useNotification()
   const [certificates, setCertificates] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [isAdmin, setIsAdmin] = useState(false)
   const [selectedHostname, setSelectedHostname] = useState(null)
   const [selectedTemplate, setSelectedTemplate] = useState(null)
   const [searchDomain, setSearchDomain] = useState('')
@@ -25,11 +30,26 @@ function InternalCertificatesPage() {
   // Load internal certificates
   useEffect(() => {
     loadInternalCertificates()
+    // Check if user is admin
+    checkUserRole()
   }, [])
 
-  const loadInternalCertificates = async () => {
+  const checkUserRole = async () => {
     try {
-      setLoading(true)
+      const response = await api.get('/api/auth/user/')
+      setIsAdmin(response.data?.is_staff || response.data?.is_superuser || false)
+    } catch (err) {
+      console.error('[InternalCerts] Failed to check user role:', err)
+      setIsAdmin(false)
+    }
+  }
+
+  const loadInternalCertificates = async (opts = {}) => {
+    const silent = opts.silent === true
+    try {
+      if (!silent) {
+        setLoading(true)
+      }
       setError('')
       console.log('[InternalCerts] Fetching internal certificates...')
 
@@ -65,8 +85,31 @@ function InternalCertificatesPage() {
       console.error('[InternalCerts] Failed to load certificates:', err)
       setError(err.response?.data?.detail || 'Failed to load internal certificates')
     } finally {
-      setLoading(false)
+      if (!silent) {
+        setLoading(false)
+      }
     }
+  }
+
+  const mergeCertificate = (updated) => {
+    if (!updated?.id) return
+    setCertificates((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
+  }
+
+  const handleAcknowledge = async (certificate) => {
+    const response = await certificateActionsApi.acknowledgeCertificate(certificate.id)
+    mergeCertificate(response.certificate)
+  }
+
+  const handleRescan = async (certificate) => {
+    const response = await certificateActionsApi.rescanCertificate(certificate.id)
+    mergeCertificate(response.certificate)
+    await loadInternalCertificates({ silent: true })
+  }
+
+  const handleDelete = async (certificateId) => {
+    await certificateActionsApi.deleteCertificate(certificateId)
+    await loadInternalCertificates({ silent: true })
   }
 
   const getFilteredCertificates = () => {
@@ -112,7 +155,9 @@ function InternalCertificatesPage() {
   const filteredCerts = getFilteredCertificates()
 
   return (
-    <div style={styles.container}>
+    <>
+      <NotificationContainer notifications={notifications} onRemove={removeNotification} />
+      <div style={styles.container}>
       {/* Sidebar Filters */}
       <div style={styles.sidebar}>
         <h3 style={styles.sidebarTitle}>🔍 Filters</h3>
@@ -240,7 +285,7 @@ function InternalCertificatesPage() {
           </button>
         </div>
 
-        <InternalCertificateIngestionForm onSuccess={loadInternalCertificates} />
+        <InternalCertificateIngestionForm onSuccess={() => loadInternalCertificates({ silent: false })} />
 
         {/* Error Message */}
         {error && (
@@ -305,11 +350,13 @@ function InternalCertificatesPage() {
                     <th style={styles.tableCell}>Expires</th>
                     <th style={styles.tableCell}>Days Left</th>
                     <th style={styles.tableCell}>Status</th>
+                    <th style={styles.tableCell}>Acknowledged</th>
+                    <th style={styles.tableCell}>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredCerts.map((cert, idx) => (
-                    <tr key={idx} style={styles.tableRow}>
+                  {filteredCerts.map((cert) => (
+                    <tr key={cert.id} style={styles.tableRow}>
                       <td style={styles.tableCell}>
                         <code style={styles.code}>{cert.hostname || 'N/A'}</code>
                       </td>
@@ -347,6 +394,24 @@ function InternalCertificatesPage() {
                       <td style={styles.tableCell}>
                         <small>{cert.status}</small>
                       </td>
+                      <td style={styles.tableCell}>
+                        <small>
+                          {cert.acknowledged_at
+                            ? new Date(cert.acknowledged_at).toLocaleString()
+                            : '—'}
+                        </small>
+                      </td>
+                      <td style={styles.tableCell}>
+                        <CertificateActionsCell
+                          certificate={cert}
+                          isAdmin={isAdmin}
+                          onAcknowledge={handleAcknowledge}
+                          onRescan={handleRescan}
+                          onDelete={handleDelete}
+                          onError={addError}
+                          onSuccess={addSuccess}
+                        />
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -355,7 +420,8 @@ function InternalCertificatesPage() {
           </div>
         )}
       </div>
-    </div>
+      </div>
+    </>
   )
 }
 
@@ -573,6 +639,26 @@ const styles = {
     textAlign: 'center',
     padding: '40px',
     color: 'var(--text-secondary)',
+  },
+  actionCell: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    maxWidth: '220px',
+  },
+  actionBtn: {
+    fontSize: '11px',
+    padding: '4px 8px',
+    borderRadius: '6px',
+    border: '1px solid var(--border)',
+    background: 'var(--surface)',
+    cursor: 'pointer',
+    color: 'var(--text)',
+  },
+  actionBtnDanger: {
+    borderColor: '#dc2626',
+    color: '#b91c1c',
+    background: 'rgba(220, 38, 38, 0.06)',
   },
 }
 

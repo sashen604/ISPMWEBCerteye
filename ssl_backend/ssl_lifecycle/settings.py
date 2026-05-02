@@ -4,6 +4,33 @@ from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+
+def _load_env_file() -> None:
+    """Load BASE_DIR/.env into os.environ if present (does not override existing vars)."""
+    path = BASE_DIR / '.env'
+    if not path.is_file():
+        return
+    try:
+        content = path.read_text(encoding='utf-8')
+    except OSError:
+        return
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#'):
+            continue
+        if '=' not in line:
+            continue
+        key, _, value = line.partition('=')
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            value = value[1:-1]
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+_load_env_file()
+
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'ssl-lifecycle-change-me')
 DEBUG = os.environ.get('DJANGO_DEBUG', 'true').lower() in ['1', 'true', 'yes']
 ALLOWED_HOSTS = [host for host in os.environ.get('DJANGO_ALLOWED_HOSTS', '*').split(',') if host]
@@ -108,6 +135,17 @@ SIMPLE_JWT = {
 }
 
 ADCS_ENCRYPTION_KEY = os.environ.get("ADCS_ENCRYPTION_KEY", SECRET_KEY)
+
+# Dev only: store AD CS WinRM passwords without AES (prefix in DB). When unset, defaults to
+# on while DEBUG is True so local testing works without DJANGO_SECRET_KEY / ADCS_ENCRYPTION_KEY.
+# Set ADCS_PLAINTEXT_PASSWORDS_DEV=false to force encrypted storage in development.
+_adcs_pt_raw = os.environ.get("ADCS_PLAINTEXT_PASSWORDS_DEV", "").strip().lower()
+if _adcs_pt_raw in ("0", "false", "no", "off"):
+    ADCS_PLAINTEXT_PASSWORDS_DEV = False
+elif _adcs_pt_raw in ("1", "true", "yes", "on"):
+    ADCS_PLAINTEXT_PASSWORDS_DEV = True
+else:
+    ADCS_PLAINTEXT_PASSWORDS_DEV = bool(DEBUG)
 
 EMAIL_BACKEND = os.environ.get("EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend")
 EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")

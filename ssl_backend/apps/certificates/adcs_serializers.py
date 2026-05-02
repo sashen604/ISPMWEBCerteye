@@ -52,19 +52,6 @@ class ADCSSourceSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at'
         ]
-
-    def validate(self, attrs):
-        """
-        Keep WinRM transport settings consistent:
-        - 5985 => HTTP (use_ssl=False)
-        - 5986 => HTTPS (use_ssl=True)
-        """
-        port = attrs.get('port', getattr(self.instance, 'port', 5985))
-        if port == 5985:
-            attrs['use_ssl'] = False
-        elif port == 5986:
-            attrs['use_ssl'] = True
-        return attrs
         read_only_fields = [
             'id',
             'connection_status',
@@ -73,8 +60,29 @@ class ADCSSourceSerializer(serializers.ModelSerializer):
             'certificate_count',
             'last_sync_at',
             'created_at',
-            'updated_at'
+            'updated_at',
         ]
+
+    def validate(self, attrs):
+        """
+        Keep WinRM transport settings consistent:
+        - 5985 => HTTP (use_ssl=False)
+        - 5986 => HTTPS (use_ssl=True)
+        Coerce port to int (JSON / HTML number inputs often send strings).
+        """
+        raw_port = attrs.get('port', getattr(self.instance, 'port', 5985))
+        try:
+            port = int(raw_port)
+        except (TypeError, ValueError) as exc:
+            raise serializers.ValidationError(
+                {'port': 'Must be a valid port number.'}
+            ) from exc
+        attrs['port'] = port
+        if port == 5985:
+            attrs['use_ssl'] = False
+        elif port == 5986:
+            attrs['use_ssl'] = True
+        return attrs
     
     def create(self, validated_data):
         """Create new AD CS source with encrypted password."""
@@ -84,9 +92,13 @@ class ADCSSourceSerializer(serializers.ModelSerializer):
         
         if not password:
             raise serializers.ValidationError("Password is required when creating AD CS source")
-        
-        # Encrypt password
-        validated_data['encrypted_password'] = ADCSCredentialEncryption.encrypt(password)
+
+        try:
+            validated_data['encrypted_password'] = ADCSCredentialEncryption.encrypt(password)
+        except ValueError as exc:
+            raise serializers.ValidationError(
+                {"password": [str(exc)]}
+            ) from exc
 
         source = super().create(validated_data)
 
@@ -108,9 +120,13 @@ class ADCSSourceSerializer(serializers.ModelSerializer):
         username_changed = 'username' in validated_data and validated_data.get('username') != instance.username
         auth_type_changed = 'auth_type' in validated_data and validated_data.get('auth_type') != instance.auth_type
         
-        # Only encrypt password if it's provided
         if password:
-            validated_data['encrypted_password'] = ADCSCredentialEncryption.encrypt(password)
+            try:
+                validated_data['encrypted_password'] = ADCSCredentialEncryption.encrypt(password)
+            except ValueError as exc:
+                raise serializers.ValidationError(
+                    {"password": [str(exc)]}
+                ) from exc
 
         source = super().update(instance, validated_data)
 

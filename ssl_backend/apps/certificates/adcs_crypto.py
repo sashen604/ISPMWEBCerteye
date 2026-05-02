@@ -16,6 +16,8 @@ import json
 
 logger = logging.getLogger(__name__)
 
+_PLAINTEXT_PREFIX = "ADCSPT1:"
+
 
 class ADCSCredentialEncryption:
     """
@@ -52,7 +54,11 @@ class ADCSCredentialEncryption:
         if not secret:
             raise ValueError("ADCS encryption secret is not configured")
         if secret == "ssl-lifecycle-change-me":
-            raise ValueError("Insecure default secret key cannot be used for ADCS credential encryption")
+            raise ValueError(
+                "Insecure default secret key cannot be used for ADCS credential encryption. "
+                "Set DJANGO_SECRET_KEY or ADCS_ENCRYPTION_KEY in the environment or in ssl_backend/.env "
+                "(see .env.example); then restart the Django server."
+            )
         return secret.encode("utf-8")
     
     @staticmethod
@@ -69,6 +75,12 @@ class ADCSCredentialEncryption:
         try:
             if plaintext is None:
                 raise ValueError("Credential value cannot be empty")
+            if getattr(settings, "ADCS_PLAINTEXT_PASSWORDS_DEV", False):
+                logger.warning(
+                    "ADCS_PLAINTEXT_PASSWORDS_DEV is enabled: storing AD CS password without encryption"
+                )
+                raw = base64.b64encode(plaintext.encode("utf-8")).decode("ascii")
+                return f"{_PLAINTEXT_PREFIX}{raw}"
             secret = ADCSCredentialEncryption._get_secret_material()
             salt = os.urandom(ADCSCredentialEncryption.SALT_LENGTH)
             key = ADCSCredentialEncryption._derive_key(secret, salt)
@@ -105,6 +117,9 @@ class ADCSCredentialEncryption:
             Decrypted plaintext string
         """
         try:
+            if isinstance(encrypted_data, str) and encrypted_data.startswith(_PLAINTEXT_PREFIX):
+                b64 = encrypted_data[len(_PLAINTEXT_PREFIX) :]
+                return base64.b64decode(b64.encode("ascii")).decode("utf-8")
             secret = ADCSCredentialEncryption._get_secret_material()
             decoded = base64.b64decode(encrypted_data)
 

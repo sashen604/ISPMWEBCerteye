@@ -304,6 +304,50 @@ class InternalCertificateService:
         raise ValueError(f"Cannot parse datetime: {dt_str}")
 
 
+def refresh_stored_internal_certificate(certificate: Certificate) -> Certificate:
+    """
+    Recompute metrics from fields already on the certificate (no agent round-trip).
+    Updates last_scanned / last_verified, days_remaining, risk, and active/expired status.
+    """
+    now = timezone.now()
+    days_remaining = max(0, (certificate.valid_to - now).days)
+    kl = certificate.key_length or 2048
+    algo = certificate.signature_algorithm or "sha256WithRSAEncryption"
+    risk_score = RiskScoringEngine.calculate_risk_score(
+        valid_to=certificate.valid_to,
+        key_length=kl,
+        is_self_signed=certificate.is_self_signed,
+        algorithm=algo,
+    )
+    risk_level = RiskScoringEngine.determine_risk_level(risk_score)
+    risk_reasoning = RiskScoringEngine.get_risk_reasoning(
+        valid_to=certificate.valid_to,
+        key_length=kl,
+        is_self_signed=certificate.is_self_signed,
+        algorithm=algo,
+    )
+    certificate.days_remaining = days_remaining
+    certificate.risk_level = risk_level
+    certificate.risk_score = risk_score
+    certificate.risk_reasoning = risk_reasoning
+    certificate.last_scanned = now
+    certificate.last_verified = now
+    certificate.status = "active" if certificate.valid_to > now else "expired"
+    certificate.save(
+        update_fields=[
+            "days_remaining",
+            "risk_level",
+            "risk_score",
+            "risk_reasoning",
+            "last_scanned",
+            "last_verified",
+            "status",
+            "updated_at",
+        ]
+    )  # updated_at required for auto_now when using update_fields
+    return certificate
+
+
 class InternalCertificateError(Exception):
     """Raised when internal certificate ingestion fails."""
     pass

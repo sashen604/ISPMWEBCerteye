@@ -2,6 +2,25 @@ import React, { useState, useEffect } from 'react';
 import api from '../api';
 import '../styles/adcs.css';
 
+/** Turn DRF / API error payloads into a single readable string. */
+function formatApiError(data) {
+  if (data == null) return '';
+  if (typeof data === 'string') return data;
+  if (typeof data.detail === 'string') return data.detail;
+  if (Array.isArray(data.detail)) return data.detail.join(' ');
+  const parts = [];
+  if (data.detail && typeof data.detail === 'object') {
+    parts.push(formatApiError(data.detail));
+  }
+  for (const [key, val] of Object.entries(data)) {
+    if (key === 'detail') continue;
+    const msgs = Array.isArray(val) ? val : [val];
+    const text = msgs.map((m) => (typeof m === 'string' ? m : JSON.stringify(m))).join('; ');
+    parts.push(`${key}: ${text}`);
+  }
+  return parts.filter(Boolean).join(' | ') || JSON.stringify(data);
+}
+
 const ADCSSourceForm = () => {
   const [formData, setFormData] = useState({
     source_name: '',
@@ -68,7 +87,12 @@ const ADCSSourceForm = () => {
     setMessage({ type: '', text: '' });
 
     try {
-      const response = await api.post('/api/certificates/adcs-sources/', formData);
+      const payload = {
+        ...formData,
+        port: Number(formData.port) || 5985,
+        sync_interval_hours: Number(formData.sync_interval_hours) || 24,
+      };
+      const response = await api.post('/api/certificates/adcs-sources/', payload);
       setMessage({
         type: 'success',
         text: `AD CS source "${response.data.source_name}" registered successfully!`,
@@ -92,9 +116,11 @@ const ADCSSourceForm = () => {
       });
       loadSources();
     } catch (error) {
+      const body = error.response?.data;
+      const detail = formatApiError(body) || error.message;
       setMessage({
         type: 'error',
-        text: `Failed to register AD CS source: ${error.response?.data?.detail || error.message}`,
+        text: `Failed to register AD CS source: ${detail}`,
       });
     } finally {
       setLoading(false);

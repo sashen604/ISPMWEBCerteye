@@ -31,6 +31,12 @@ class Certificate(models.Model):
     crypto_findings = models.JSONField(default=dict, blank=True, help_text="Detailed cryptographic analysis (algorithm strength, key analysis)")
     created_at = models.DateTimeField(default=timezone.now, db_index=True)
     updated_at = models.DateTimeField(auto_now=True, db_index=True)
+    acknowledged_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Operator acknowledged review (internal / workflow)",
+    )
 
     class Meta:
         ordering = ['valid_to']

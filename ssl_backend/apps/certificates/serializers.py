@@ -11,9 +11,17 @@ class CertificateSerializer(serializers.ModelSerializer):
             'valid_to', 'days_remaining', 'risk_level', 'risk_score', 'last_scanned',
             'source_type', 'status', 'thumbprint', 'template_name', 'agent_id',
             'source_priority', 'certificate_chain', 'last_verified', 'is_self_signed',
-            'san_list', 'crypto_findings', 'risk_reasoning', 'created_at', 'updated_at'
+            'san_list', 'crypto_findings', 'risk_reasoning', 'created_at', 'updated_at',
+            'acknowledged_at',
         ]
-        read_only_fields = ['id', 'days_remaining', 'risk_level', 'risk_score', 'created_at', 'updated_at']
+        read_only_fields = [
+            'id',
+            'days_remaining',
+            'risk_level',
+            'risk_score',
+            'created_at',
+            'updated_at',
+        ]
 
 
 class DomainSerializer(serializers.ModelSerializer):

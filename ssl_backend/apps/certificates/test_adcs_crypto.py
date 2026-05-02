@@ -11,3 +11,12 @@ class ADCSCredentialEncryptionTests(TestCase):
         self.assertNotEqual(encrypted, plaintext)
         decrypted = ADCSCredentialEncryption.decrypt(encrypted)
         self.assertEqual(decrypted, plaintext)
+
+
+@override_settings(ADCS_PLAINTEXT_PASSWORDS_DEV=True)
+class ADCSCredentialPlaintextDevTests(TestCase):
+    def test_plaintext_roundtrip(self):
+        plaintext = "PlainDevPassword#1"
+        blob = ADCSCredentialEncryption.encrypt(plaintext)
+        self.assertTrue(blob.startswith("ADCSPT1:"))
+        self.assertEqual(ADCSCredentialEncryption.decrypt(blob), plaintext)

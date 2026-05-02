@@ -1,12 +1,19 @@
 import React, { useState, useEffect } from 'react'
 import api from '../api'
+import { certificateActionsApi } from '../api'
+import CertificateActionsCell from '../components/CertificateActionsCell'
+import { useNotification, NotificationContainer } from '../hooks/useNotification.jsx'
 
 function CertificatesPage() {
+  // Notifications
+  const { notifications, addSuccess, addError, removeNotification } = useNotification()
+  
   // Main state
   const [certificates, setCertificates] = useState([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [selectedCerts, setSelectedCerts] = useState(new Set())
+  const [isAdmin, setIsAdmin] = useState(false)
   
   // Pagination state
   const [limit, setLimit] = useState(50)
@@ -76,7 +83,18 @@ function CertificatesPage() {
   useEffect(() => {
     loadCertificates()
     loadStatistics()
+    checkUserRole()
   }, [limit, offset, search, riskLevel, certType, sourceType, expirationStatus, issuer, keyLength, status, orderBy])
+
+  const checkUserRole = async () => {
+    try {
+      const response = await api.get('/api/auth/user/')
+      setIsAdmin(response.data?.is_staff || response.data?.is_superuser || false)
+    } catch (err) {
+      console.error('[CertificatesPage] Failed to check user role:', err)
+      setIsAdmin(false)
+    }
+  }
 
   // Auto-dismiss messages
   useEffect(() => {
@@ -187,11 +205,33 @@ function CertificatesPage() {
     return Math.max(0, days)
   }
 
+  const mergeCertificate = (updated) => {
+    if (!updated?.id) return
+    setCertificates((prev) => prev.map((c) => (c.id === updated.id ? updated : c)))
+  }
+
+  const handleAcknowledge = async (certificate) => {
+    const response = await certificateActionsApi.acknowledgeCertificate(certificate.id)
+    mergeCertificate(response.certificate)
+  }
+
+  const handleRescan = async (certificate) => {
+    const response = await certificateActionsApi.rescanCertificate(certificate.id)
+    mergeCertificate(response.certificate)
+  }
+
+  const handleDelete = async (certificateId) => {
+    await certificateActionsApi.deleteCertificate(certificateId)
+    await loadCertificates()
+  }
+
   const totalPages = Math.ceil(totalCount / limit)
   const currentPage = Math.floor(offset / limit) + 1
 
   return (
-    <div className="container-fluid">
+    <>
+      <NotificationContainer notifications={notifications} onRemove={removeNotification} />
+      <div className="container-fluid">
       {/* Header */}
       <div className="d-flex justify-content-between align-items-center mb-4">
         <div>
@@ -311,6 +351,7 @@ function CertificatesPage() {
               <option value="">All Sources</option>
               <option value="scanner">🔍 Scanner</option>
               <option value="internal_agent">🖥️ Internal Agent</option>
+              <option value="adcs">🏢 AD CS</option>
             </select>
           </div>
         </div>
@@ -463,6 +504,7 @@ function CertificatesPage() {
                     <th>Expires</th>
                     <th>Days Left</th>
                     <th>Status</th>
+                    <th>Acknowledged</th>
                     <th>Actions</th>
                   </tr>
                 </thead>
@@ -484,7 +526,12 @@ function CertificatesPage() {
                       <td><small>{cert.certificate_type}</small></td>
                       <td>
                         <span className="badge bg-secondary">
-                          {cert.source_type === 'scanner' ? '🔍' : '🖥️'} {cert.source_type}
+                          {cert.source_type === 'scanner'
+                            ? '🔍'
+                            : cert.source_type === 'adcs'
+                              ? '🏢'
+                              : '🖥️'}{' '}
+                          {cert.source_type}
                         </span>
                       </td>
                       <td>
@@ -504,12 +551,22 @@ function CertificatesPage() {
                         </span>
                       </td>
                       <td>
-                        <button
-                          className="btn btn-link btn-sm"
-                          onClick={() => setDetailCert(cert)}
-                        >
-                          📋 Details
-                        </button>
+                        <small>
+                          {cert.acknowledged_at
+                            ? new Date(cert.acknowledged_at).toLocaleString()
+                            : '—'}
+                        </small>
+                      </td>
+                      <td>
+                        <CertificateActionsCell
+                          certificate={cert}
+                          isAdmin={isAdmin}
+                          onAcknowledge={handleAcknowledge}
+                          onRescan={handleRescan}
+                          onDelete={handleDelete}
+                          onError={addError}
+                          onSuccess={addSuccess}
+                        />
                       </td>
                     </tr>
                   ))}
@@ -656,7 +713,8 @@ function CertificatesPage() {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </>
   )
 }
 

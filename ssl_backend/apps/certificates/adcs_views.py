@@ -64,7 +64,10 @@ class ADCSSourceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN
             )
         return super().create(request, *args, **kwargs)
-    
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
     def update(self, request, *args, **kwargs):
         """Update AD CS source configuration."""
         if not self._check_permission():
