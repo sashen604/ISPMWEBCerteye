@@ -8,19 +8,12 @@ from datetime import datetime, timedelta
 
 from .models import AuditLog, CertificateAuditLog, AlertAuditLog
 from .serializers import AuditLogSerializer, CertificateAuditLogSerializer, AlertAuditLogSerializer
-
-
-class IsSuperAdminOrAdmin(IsAuthenticated):
-    """Permission class to allow only superadmin or admin users."""
-    def has_permission(self, request, view):
-        if not super().has_permission(request, view):
-            return False
-        return request.user.is_superadmin or request.user.is_admin
+from apps.authentication.permissions import IsAdminOrSuperAdmin
 
 
 class AuditLogsView(APIView):
     """Main audit logs endpoint with filtering capabilities."""
-    permission_classes = [IsSuperAdminOrAdmin]
+    permission_classes = [IsAuthenticated, IsAdminOrSuperAdmin]
 
     def get(self, request, log_id=None):
         """
@@ -112,7 +105,7 @@ class AuditLogsView(APIView):
 
 class CertificateAuditLogsView(APIView):
     """Certificate-specific audit logs endpoint."""
-    permission_classes = [IsSuperAdminOrAdmin]
+    permission_classes = [IsAuthenticated, IsAdminOrSuperAdmin]
 
     def get(self, request):
         """
@@ -191,7 +184,7 @@ class CertificateAuditLogsView(APIView):
 
 class AlertAuditLogsView(APIView):
     """Alert-specific audit logs endpoint."""
-    permission_classes = [IsSuperAdminOrAdmin]
+    permission_classes = [IsAuthenticated, IsAdminOrSuperAdmin]
 
     def get(self, request):
         """

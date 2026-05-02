@@ -128,6 +128,22 @@ class ADCSSourceViewSet(viewsets.ModelViewSet):
         )
         
         return Response(result)
+
+    @action(detail=True, methods=['post'])
+    def verify_features(self, request, pk=None):
+        """
+        Run AD CS feature verification checklist using PowerShell commands.
+        POST /api/certificates/adcs-sources/{id}/verify_features/
+        """
+        if not self._check_permission():
+            return Response(
+                {'detail': 'Only superadmin/admin can run feature verification'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        source = get_object_or_404(ADCSSource, pk=pk)
+        result = ADCSIntegrationService.run_feature_checklist(source)
+        return Response(result, status=status.HTTP_200_OK if result.get("success") else status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['get'])
     def sync_history(self, request, pk=None):

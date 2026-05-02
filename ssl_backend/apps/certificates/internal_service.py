@@ -14,6 +14,7 @@ from django.utils import timezone
 from .models import Certificate
 from .parsers import CertificateParser
 from apps.risk_engine.services import RiskScoringEngine
+from apps.alerts.services import AlertEngine
 
 
 class InternalCertificateService:
@@ -128,6 +129,11 @@ class InternalCertificateService:
                     certificate = Certificate.objects.create(**cert_data)
                     status = 'created'
                     message = f"Certificate created (no thumbprint): {hostname}/{subject}"
+
+            try:
+                AlertEngine().trigger_risk_alert(certificate, trigger_source='immediate')
+            except Exception:
+                pass
             
             return certificate, status == 'created', status
             

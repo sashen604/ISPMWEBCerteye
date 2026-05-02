@@ -42,3 +42,60 @@ class Certificate(models.Model):
 
     def __str__(self):
         return f"{self.domain}:{self.serial_number}"
+
+
+class Domain(models.Model):
+    name = models.CharField(max_length=255, unique=True, db_index=True)
+    is_enabled = models.BooleanField(default=True, db_index=True)
+    last_scan_at = models.DateTimeField(null=True, blank=True)
+    last_status = models.CharField(max_length=50, null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name
+
+
+class DomainScanHistory(models.Model):
+    STATUS_SUCCESS = "success"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = (
+        (STATUS_SUCCESS, "Success"),
+        (STATUS_FAILED, "Failed"),
+    )
+
+    domain = models.ForeignKey(
+        Domain,
+        on_delete=models.CASCADE,
+        related_name="scan_history",
+    )
+    scanned_at = models.DateTimeField(default=timezone.now, db_index=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, db_index=True)
+    error_message = models.TextField(blank=True, null=True)
+
+    certificate = models.ForeignKey(
+        Certificate,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="domain_scan_history",
+    )
+    parsed_data = models.JSONField(default=dict, blank=True)
+    risk_score = models.PositiveIntegerField(default=0)
+    risk_level = models.CharField(max_length=50, blank=True, default="")
+    risk_reasoning = models.JSONField(default=dict, blank=True)
+
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ["-scanned_at"]
+        indexes = [
+            models.Index(fields=["domain", "-scanned_at"]),
+            models.Index(fields=["status", "-scanned_at"]),
+        ]
+
+    def __str__(self):
+        return f"{self.domain.name} @ {self.scanned_at} [{self.status}]"

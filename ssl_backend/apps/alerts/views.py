@@ -3,10 +3,12 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 import logging
 
 from apps.alerts.services import AlertEngine
 from apps.alerts.models import Alert
+from apps.alerts.serializers import AlertSerializer
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -31,21 +33,19 @@ class AlertsView(APIView):
         if severity:
             alerts = alerts.filter(severity__iexact=severity)
         
-        alert_type = request.query_params.get('type')
+        alert_type = request.query_params.get('alert_type') or request.query_params.get('type')
         if alert_type:
-            alerts = alerts.filter(title__icontains=alert_type)
+            alerts = alerts.filter(alert_type__iexact=alert_type)
+
+        is_acknowledged = request.query_params.get('is_acknowledged')
+        if is_acknowledged is not None:
+            alerts = alerts.filter(is_acknowledged=str(is_acknowledged).lower() in ['1', 'true', 'yes'])
         
         # Pagination
         limit = int(request.query_params.get('limit', 50))
         alerts = alerts[:limit]
         
-        data = [{
-            'id': alert.id,
-            'title': alert.title,
-            'severity': alert.severity,
-            'message': alert.message,
-            'created_at': alert.created_at.isoformat(),
-        } for alert in alerts]
+        data = AlertSerializer(alerts, many=True).data
         
         return Response({'success': True, 'alerts': data, 'count': len(data)})
 
@@ -89,9 +89,9 @@ class AlertGeneratorView(APIView):
             custom_thresholds = request.data.get('custom_thresholds')
             
             # Validate alert_type
-            if alert_type not in ['expiry', 'crypto_weakness', 'both']:
+            if alert_type not in ['expiry', 'risk', 'both']:
                 return Response(
-                    {'error': f'Invalid alert_type: {alert_type}. Must be expiry, crypto_weakness, or both.'},
+                    {'error': f'Invalid alert_type: {alert_type}. Must be expiry, risk, or both.'},
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
@@ -100,7 +100,7 @@ class AlertGeneratorView(APIView):
             
             all_alerts = []
             expiry_count = 0
-            crypto_count = 0
+            risk_count = 0
             
             # Generate expiry alerts
             if alert_type in ['expiry', 'both']:
@@ -109,17 +109,17 @@ class AlertGeneratorView(APIView):
                 expiry_count = len(expiry_alerts)
                 logger.info(f"Generated {expiry_count} expiry alerts")
             
-            # Generate crypto weakness alerts
-            if alert_type in ['crypto_weakness', 'both']:
-                crypto_alerts = engine.generate_crypto_weakness_alerts()
-                all_alerts.extend(crypto_alerts)
-                crypto_count = len(crypto_alerts)
-                logger.info(f"Generated {crypto_count} crypto weakness alerts")
+            # Generate risk alerts
+            if alert_type in ['risk', 'both']:
+                risk_alerts = engine.generate_immediate_risk_alerts()
+                all_alerts.extend(risk_alerts)
+                risk_count = len(risk_alerts)
+                logger.info(f"Generated {risk_count} risk alerts")
             
             return Response({
                 'success': True,
                 'expiry_alerts': expiry_count,
-                'crypto_alerts': crypto_count,
+                'risk_alerts': risk_count,
                 'total_alerts': len(all_alerts),
                 'alerts': all_alerts,
                 'message': f'Generated {len(all_alerts)} alerts'
@@ -156,13 +156,7 @@ class AlertDetailView(APIView):
                 alert = Alert.objects.get(id=alert_id)
                 return Response({
                     'success': True,
-                    'alert': {
-                        'id': alert.id,
-                        'title': alert.title,
-                        'severity': alert.severity,
-                        'message': alert.message,
-                        'created_at': alert.created_at.isoformat(),
-                    }
+                    'alert': AlertSerializer(alert).data
                 })
             except Alert.DoesNotExist:
                 return Response(
@@ -184,3 +178,25 @@ class AlertDetailView(APIView):
                 'success': True,
                 'statistics': stats,
             })
+
+    def patch(self, request, alert_id=None):
+        """Acknowledge an alert."""
+        if not alert_id:
+            return Response({'error': 'alert_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        if not hasattr(request.user, 'role') or request.user.role not in ['superadmin', 'admin']:
+            return Response({'error': 'Permission denied. Admin access required.'}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            alert = Alert.objects.get(id=alert_id)
+        except Alert.DoesNotExist:
+            return Response({'error': 'Alert not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        is_acknowledged = request.data.get('is_acknowledged', True)
+        alert.is_acknowledged = bool(is_acknowledged)
+        if alert.is_acknowledged:
+            alert.acknowledged_by = request.user.username
+            alert.acknowledged_at = timezone.now()
+        else:
+            alert.acknowledged_by = None
+            alert.acknowledged_at = None
+        alert.save(update_fields=['is_acknowledged', 'acknowledged_by', 'acknowledged_at', 'updated_at'])
+        return Response({'success': True, 'alert': AlertSerializer(alert).data})

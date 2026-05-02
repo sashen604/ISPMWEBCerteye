@@ -1,20 +1,8 @@
-"""
-Alert Engine Service
-
-Provides automated alert generation and email notification system for:
-- Certificate expiration warnings (CRITICAL at 7d, HIGH at 30d, MEDIUM at 90d)
-- Cryptographic weakness detection (weak algorithms, weak keys, self-signed)
-- Email routing to admin users
-- Database persistence of alerts
-- Configurable thresholds
-
-Author: CertEye System
-Date: April 19, 2026
-"""
+"""Alert engine for expiry/risk notifications with dedupe and SMTP delivery."""
 
 import logging
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from django.utils import timezone
 from django.core.mail import send_mail
@@ -30,250 +18,112 @@ logger = logging.getLogger(__name__)
 
 
 class AlertEngine:
-    """
-    Service for generating and sending alerts based on certificate conditions.
-    
-    Alert Types:
-    - EXPIRY: Certificates expiring soon (configurable thresholds)
-    - CRYPTO_WEAKNESS: Weak algorithms, weak keys, self-signed certs
-    
-    Severity Levels:
-    - CRITICAL: Immediate action required (expires in < 7 days, broken crypto)
-    - HIGH: Action required soon (expires in 7-30 days, weak key length)
-    - MEDIUM: Plan for action (expires in 30-90 days)
-    - LOW: Informational (expires in > 90 days)
-    """
+    EXPIRY_THRESHOLDS = [90, 30, 14, 7]
+    DEDUPE_WINDOW_HOURS = 6
 
-    # Default expiration thresholds (in days)
-    EXPIRY_THRESHOLDS = {
-        'CRITICAL': 7,
-        'HIGH': 30,
-        'MEDIUM': 90,
-    }
-
-    # Weak algorithms that trigger alerts
-    WEAK_ALGORITHMS = [
-        'sha1WithRSAEncryption',
-        'md5WithRSAEncryption',
-        'sha1',
-        'md5',
-    ]
-
-    # Minimum key length for certificates
-    WEAK_KEY_LENGTH = 2048
-    STRONG_KEY_LENGTH = 3072
-
-    def __init__(self, expiry_thresholds: Optional[Dict[str, int]] = None):
-        """
-        Initialize the alert engine.
-        
-        Args:
-            expiry_thresholds: Custom thresholds for expiry alerts
-                              (CRITICAL, HIGH, MEDIUM in days)
-        """
-        self.expiry_thresholds = expiry_thresholds or self.EXPIRY_THRESHOLDS
+    def __init__(self, expiry_thresholds: Optional[List[int]] = None):
+        self.expiry_thresholds = sorted(expiry_thresholds or self.EXPIRY_THRESHOLDS, reverse=True)
 
     def generate_expiry_alerts(self) -> List[Dict]:
-        """
-        Generate alerts for certificates expiring soon.
-        
-        Returns:
-            List of alert dictionaries created
-        """
         alerts_created = []
         now = timezone.now()
 
-        # CRITICAL: Expiring within threshold
-        critical_expiry = now + timedelta(days=self.expiry_thresholds['CRITICAL'])
-        critical_certs = Certificate.objects.filter(
-            valid_to__gte=now,
-            valid_to__lte=critical_expiry,
-            status='active'
-        )
-
-        for cert in critical_certs:
-            days_left = (cert.valid_to - now).days
-            alert = self._create_alert(
-                title=f"CRITICAL: {cert.domain} expires in {days_left} days",
-                severity='CRITICAL',
-                message=f"Certificate for {cert.domain} (Issuer: {cert.issuer}) expires in {days_left} days on {cert.valid_to.strftime('%Y-%m-%d')}. Immediate renewal required.",
-                alert_type='EXPIRY',
-                certificate=cert
+        for threshold in self.expiry_thresholds:
+            certs = Certificate.objects.filter(
+                status='active',
+                valid_to__gte=now,
+                valid_to__lte=now + timedelta(days=threshold),
             )
-            if alert:
-                alerts_created.append(alert)
-
-        # HIGH: Expiring within 30 days but beyond critical threshold
-        high_expiry = now + timedelta(days=self.expiry_thresholds['HIGH'])
-        high_certs = Certificate.objects.filter(
-            valid_to__gt=critical_expiry,
-            valid_to__lte=high_expiry,
-            status='active'
-        )
-
-        for cert in high_certs:
-            days_left = (cert.valid_to - now).days
-            alert = self._create_alert(
-                title=f"HIGH: {cert.domain} expires in {days_left} days",
-                severity='HIGH',
-                message=f"Certificate for {cert.domain} (Issuer: {cert.issuer}) expires in {days_left} days on {cert.valid_to.strftime('%Y-%m-%d')}. Renewal recommended.",
-                alert_type='EXPIRY',
-                certificate=cert
-            )
-            if alert:
-                alerts_created.append(alert)
-
-        # MEDIUM: Expiring within 90 days but beyond high threshold
-        medium_expiry = now + timedelta(days=self.expiry_thresholds['MEDIUM'])
-        medium_certs = Certificate.objects.filter(
-            valid_to__gt=high_expiry,
-            valid_to__lte=medium_expiry,
-            status='active'
-        )
-
-        for cert in medium_certs:
-            days_left = (cert.valid_to - now).days
-            alert = self._create_alert(
-                title=f"MEDIUM: {cert.domain} expires in {days_left} days",
-                severity='MEDIUM',
-                message=f"Certificate for {cert.domain} (Issuer: {cert.issuer}) expires in {days_left} days on {cert.valid_to.strftime('%Y-%m-%d')}. Plan for renewal.",
-                alert_type='EXPIRY',
-                certificate=cert
-            )
-            if alert:
-                alerts_created.append(alert)
-
-        logger.info(f"Generated {len(alerts_created)} expiry alerts")
-        return alerts_created
-
-    def generate_crypto_weakness_alerts(self) -> List[Dict]:
-        """
-        Generate alerts for cryptographic weaknesses.
-        
-        Detects:
-        - Weak signature algorithms (SHA-1, MD5)
-        - Weak key lengths (< 2048 bits)
-        - Self-signed certificates
-        
-        Returns:
-            List of alert dictionaries created
-        """
-        alerts_created = []
-
-        # Check for weak algorithms (CRITICAL)
-        for algorithm_variant in self.WEAK_ALGORITHMS:
-            weak_algo_certs = Certificate.objects.filter(
-                signature_algorithm__icontains=algorithm_variant,
-                status='active'
-            )
-
-            for cert in weak_algo_certs:
+            for cert in certs:
+                days_left = max(0, (cert.valid_to - now).days)
+                if days_left > threshold:
+                    continue
+                severity = self._severity_for_threshold(threshold)
+                title = f"{severity}: {cert.domain} expires in {days_left} days"
+                message = (
+                    f"Certificate for {cert.domain} expires in {days_left} days on "
+                    f"{cert.valid_to.strftime('%Y-%m-%d %H:%M:%S')}."
+                )
+                dedupe_key = f"expiry:{cert.id}:{severity}:{threshold}"
                 alert = self._create_alert(
-                    title=f"CRITICAL: {cert.domain} uses weak algorithm {cert.signature_algorithm}",
-                    severity='CRITICAL',
-                    message=f"Certificate for {cert.domain} uses deprecated algorithm {cert.signature_algorithm}. "
-                           f"This algorithm is vulnerable and poses a security risk. "
-                           f"Immediate replacement required.",
-                    alert_type='CRYPTO_WEAKNESS',
-                    certificate=cert
+                    title=title,
+                    severity=severity,
+                    message=message,
+                    alert_type='EXPIRY',
+                    certificate=cert,
+                    dedupe_key=dedupe_key,
+                    threshold_days=threshold,
+                    trigger_source='scheduled',
                 )
                 if alert:
                     alerts_created.append(alert)
+        return alerts_created
 
-        # Check for weak key lengths (HIGH)
-        weak_key_certs = Certificate.objects.filter(
-            key_length__lt=self.WEAK_KEY_LENGTH,
-            status='active'
+    def trigger_risk_alert(self, certificate: Certificate, trigger_source: str = 'immediate') -> Optional[Dict]:
+        """Trigger immediate alerts for HIGH/CRITICAL risk certificates."""
+        if not certificate or certificate.risk_level not in {'HIGH', 'CRITICAL'}:
+            return None
+        severity = 'CRITICAL' if certificate.risk_level == 'CRITICAL' else 'HIGH'
+        title = f"{severity}: {certificate.domain} risk level is {certificate.risk_level}"
+        message = (
+            f"Certificate {certificate.domain} has risk level {certificate.risk_level} "
+            f"with score {certificate.risk_score}."
+        )
+        dedupe_key = f"risk:{certificate.id}:{certificate.risk_level}"
+        return self._create_alert(
+            title=title,
+            severity=severity,
+            message=message,
+            alert_type='OTHER',
+            certificate=certificate,
+            dedupe_key=dedupe_key,
+            threshold_days=None,
+            trigger_source=trigger_source,
         )
 
-        for cert in weak_key_certs:
-            alert = self._create_alert(
-                title=f"HIGH: {cert.domain} uses {cert.key_length}-bit key (minimum recommended: 2048)",
-                severity='HIGH',
-                message=f"Certificate for {cert.domain} has a weak key length of {cert.key_length} bits. "
-                       f"Recommended minimum is 2048 bits. Certificate replacement recommended.",
-                alert_type='CRYPTO_WEAKNESS',
-                certificate=cert
-            )
-            if alert:
-                alerts_created.append(alert)
-
-        # Check for self-signed certs (MEDIUM)
-        if hasattr(Certificate, 'is_self_signed'):
-            self_signed_certs = Certificate.objects.filter(
-                is_self_signed=True,
-                status='active'
-            )
-
-            for cert in self_signed_certs:
-                alert = self._create_alert(
-                    title=f"MEDIUM: {cert.domain} is self-signed",
-                    severity='MEDIUM',
-                    message=f"Certificate for {cert.domain} is self-signed and not issued by a trusted CA. "
-                           f"This may cause browser warnings and trust issues. Consider obtaining a CA-signed certificate.",
-                    alert_type='CRYPTO_WEAKNESS',
-                    certificate=cert
-                )
-                if alert:
-                    alerts_created.append(alert)
-
-        logger.info(f"Generated {len(alerts_created)} cryptographic weakness alerts")
-        return alerts_created
+    def generate_immediate_risk_alerts(self) -> List[Dict]:
+        """Generate immediate-style alerts for all currently high/critical certificates."""
+        alerts = []
+        candidates = Certificate.objects.filter(status='active', risk_level__in=['HIGH', 'CRITICAL'])
+        for cert in candidates:
+            created = self.trigger_risk_alert(cert, trigger_source='scheduled')
+            if created:
+                alerts.append(created)
+        return alerts
 
     def _create_alert(
         self,
+        *,
         title: str,
         severity: str,
         message: str,
         alert_type: str,
-        certificate: Optional[Certificate] = None
+        certificate: Optional[Certificate],
+        dedupe_key: str,
+        threshold_days: Optional[int],
+        trigger_source: str,
     ) -> Optional[Dict]:
-        """
-        Create an alert in the database and send email notification.
-        
-        Args:
-            title: Alert title
-            severity: Severity level (CRITICAL, HIGH, MEDIUM, LOW)
-            message: Alert message
-            alert_type: Type of alert (EXPIRY, CRYPTO_WEAKNESS)
-            certificate: Associated Certificate object (optional)
-            
-        Returns:
-            Dictionary with alert data or None if creation failed
-        """
         try:
-            # Check if similar alert already exists (avoid duplicates)
-            # Look for same title created in last 24 hours
             existing_alert = Alert.objects.filter(
-                title=title,
-                created_at__gte=timezone.now() - timedelta(hours=24)
+                dedupe_key=dedupe_key,
+                created_at__gte=timezone.now() - timedelta(hours=self.DEDUPE_WINDOW_HOURS),
             ).exists()
-
             if existing_alert:
-                logger.debug(f"Alert already exists: {title}")
                 return None
 
-            # Create alert in database
             with transaction.atomic():
                 alert = Alert.objects.create(
                     title=title,
                     severity=severity,
                     message=message,
                     alert_type=alert_type,
+                    dedupe_key=dedupe_key,
+                    threshold_days=threshold_days,
+                    trigger_source=trigger_source,
                     certificate_id=certificate.id if certificate else None,
                     certificate_domain=certificate.domain if certificate else None,
                 )
-
-                # Send email notification
-                self._send_email_notification(
-                    title=title,
-                    severity=severity,
-                    message=message,
-                    alert_type=alert_type,
-                    certificate=certificate
-                )
-
-            logger.info(f"Created alert: {title} (severity: {severity})")
+                self._send_email_notification(alert=alert, certificate=certificate)
 
             return {
                 'id': alert.id,
@@ -281,114 +131,73 @@ class AlertEngine:
                 'severity': alert.severity,
                 'message': alert.message,
                 'alert_type': alert.alert_type,
+                'dedupe_key': alert.dedupe_key,
+                'threshold_days': alert.threshold_days,
+                'trigger_source': alert.trigger_source,
                 'certificate_id': alert.certificate_id,
                 'certificate_domain': alert.certificate_domain,
                 'created_at': alert.created_at.isoformat(),
             }
-
-        except Exception as e:
-            logger.error(f"Failed to create alert: {str(e)}")
+        except Exception as exc:
+            logger.error(f"Failed to create alert: {exc}")
             return None
 
-    def _send_email_notification(
-        self,
-        title: str,
-        severity: str,
-        message: str,
-        alert_type: str,
-        certificate: Optional[Certificate] = None
-    ) -> bool:
-        """
-        Send email notification to admin users.
-        
-        Args:
-            title: Alert title
-            severity: Severity level
-            message: Alert message
-            alert_type: Type of alert
-            certificate: Associated Certificate object (optional)
-            
-        Returns:
-            True if email sent successfully, False otherwise
-        """
+    def _send_email_notification(self, *, alert: Alert, certificate: Optional[Certificate]) -> bool:
         try:
-            # Get admin users
-            admin_users = User.objects.filter(
-                role__in=['superadmin', 'admin']
+            recipients = self._resolve_recipients()
+            if not recipients:
+                return False
+
+            email_subject = f"[{alert.severity}] CertEye Alert: {alert.title}"
+            email_body = (
+                "CertEye Alert Notification\n"
+                "============================================================\n\n"
+                f"Alert Title: {alert.title}\n"
+                f"Severity: {alert.severity}\n"
+                f"Alert Type: {alert.alert_type}\n"
+                f"Triggered By: {alert.trigger_source}\n"
+                f"Timestamp: {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"Message:\n{alert.message}\n\n"
+            )
+            if certificate:
+                email_body += (
+                    "Certificate Details:\n"
+                    f"- Domain: {certificate.domain}\n"
+                    f"- Issuer: {certificate.issuer}\n"
+                    f"- Expires: {certificate.valid_to.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                    f"- Risk Level: {certificate.risk_level}\n"
+                    f"- Risk Score: {certificate.risk_score}/100\n\n"
+                )
+            email_body += (
+                f"Dashboard: {self._get_dashboard_url()}\n\n"
+                "This is an automated alert from CertEye.\n"
             )
 
-            if not admin_users.exists():
-                logger.warning("No admin users found for alert notification")
-                return False
-
-            admin_emails = [user.email for user in admin_users if user.email]
-
-            if not admin_emails:
-                logger.warning("No admin email addresses found")
-                return False
-
-            # Build email content
-            email_subject = f"[{severity}] CertEye Alert: {title}"
-
-            email_body = f"""
-CertEye Alert Notification
-{'=' * 60}
-
-Alert Title: {title}
-Severity: {severity}
-Alert Type: {alert_type}
-Timestamp: {timezone.now().strftime('%Y-%m-%d %H:%M:%S')}
-
-Message:
-{message}
-
-"""
-
-            if certificate:
-                email_body += f"""
-Certificate Details:
-- Domain: {certificate.domain}
-- Issuer: {certificate.issuer}
-- Subject: {certificate.subject}
-- Expires: {certificate.valid_to.strftime('%Y-%m-%d %H:%M:%S')}
-- Days Remaining: {certificate.days_remaining}
-- Risk Level: {certificate.risk_level}
-- Risk Score: {certificate.risk_score}/100
-
-"""
-
-            email_body += f"""
-Action Required:
-Please log in to the CertEye dashboard to review this alert and take appropriate action.
-
-Dashboard: {self._get_dashboard_url()}
-Alert Severity Guide:
-- CRITICAL: Immediate action required
-- HIGH: Action required within 1-7 days
-- MEDIUM: Plan for action within 1-3 months
-- LOW: Informational only
-
----
-This is an automated alert from CertEye Certificate Monitoring System.
-Please do not reply to this email.
-"""
-
-            # Send email
             send_mail(
                 subject=email_subject,
                 message=email_body,
                 from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=admin_emails,
+                recipient_list=recipients,
                 fail_silently=False,
             )
-
-            logger.info(f"Email notification sent to {len(admin_emails)} admins for alert: {title}")
             return True
-
-        except Exception as e:
-            logger.error(f"Failed to send email notification: {str(e)}")
+        except Exception as exc:
+            logger.error(f"Failed to send email notification: {exc}")
             return False
 
+    def _resolve_recipients(self) -> List[str]:
+        admin_users = User.objects.filter(role__in=['superadmin', 'admin'])
+        role_emails = [u.email for u in admin_users if u.email]
+        configured = list(getattr(settings, "ALERT_RECIPIENTS", []))
+        return sorted(set([email for email in role_emails + configured if email]))
+
+    @staticmethod
+    def _severity_for_threshold(threshold: int) -> str:
+        if threshold <= 7:
+            return 'CRITICAL'
+        if threshold <= 30:
+            return 'HIGH'
+        return 'MEDIUM'
+
     def _get_dashboard_url(self) -> str:
-        """Get the dashboard URL (from settings or default)."""
         return getattr(settings, 'DASHBOARD_URL', 'http://localhost:5173/dashboard')

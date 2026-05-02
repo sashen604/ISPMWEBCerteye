@@ -74,6 +74,8 @@ class CertificateParser:
             
             # Determine certificate type
             cert_type = CertificateParser._determine_certificate_type(subject)
+            san_list = CertificateParser._extract_san_list(cert)
+            is_self_signed = subject == issuer
             
             return {
                 'domain': domain,
@@ -88,7 +90,9 @@ class CertificateParser:
                 'days_remaining': days_remaining,
                 'last_scanned': now,
                 'source_type': 'scanner',
-                'status': 'active',
+                'status': 'active' if not_after > now else 'expired',
+                'san_list': san_list,
+                'is_self_signed': is_self_signed,
             }
             
         except AttributeError as e:
@@ -207,3 +211,22 @@ class CertificateParser:
             return "multi-domain"
         
         return "single"
+
+    @staticmethod
+    def _extract_san_list(cert: crypto.X509) -> list:
+        """Extract SAN entries from certificate extensions."""
+        san_values = []
+        try:
+            for idx in range(cert.get_extension_count()):
+                extension = cert.get_extension(idx)
+                if extension.get_short_name().decode("utf-8").lower() == "subjectaltname":
+                    san_text = str(extension)
+                    parts = [part.strip() for part in san_text.split(",")]
+                    for part in parts:
+                        if ":" in part:
+                            san_values.append(part.split(":", 1)[1].strip())
+                        else:
+                            san_values.append(part)
+        except Exception:
+            return []
+        return san_values

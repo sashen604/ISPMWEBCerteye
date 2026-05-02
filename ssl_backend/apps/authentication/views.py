@@ -18,6 +18,7 @@ from .serializers import (
     SuspiciousLoginAttemptSerializer
 )
 from .permissions import IsSuperAdmin
+from apps.audit_logs.services import AuditLoggingService
 
 User = get_user_model()
 
@@ -64,29 +65,68 @@ class LoginView(APIView):
         username = request.data.get('username')
         password = request.data.get('password')
         
-        user = authenticate(username=username, password=password)
-        
         ip_address = get_client_ip(request)
         user_agent = request.META.get('HTTP_USER_AGENT', '')
-        
-        if user is None:
-            # Log failed login
+
+        if not username or not password:
             UserLoginLog.objects.create(
-                user=User.objects.filter(username=username).first(),
+                user=None,
+                attempted_username=username or '',
+                ip_address=ip_address,
+                user_agent=user_agent,
+                is_successful=False,
+                failure_reason='Missing username or password',
+            )
+            return Response({'success': False, 'error': 'Invalid credentials'}, status=401)
+
+        user = authenticate(username=username, password=password)
+
+        if user is None:
+            existing_user = User.objects.filter(username=username).first()
+            UserLoginLog.objects.create(
+                user=existing_user,
+                attempted_username=username,
                 ip_address=ip_address,
                 user_agent=user_agent,
                 is_successful=False,
                 failure_reason='Invalid credentials'
             )
+            if existing_user:
+                SecurityAuditLog.objects.create(
+                    user=existing_user,
+                    event_type='login_failed',
+                    description='Failed login attempt',
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    status='failure',
+                    metadata={'attempted_username': username, 'reason': 'invalid_credentials'},
+                )
+            AuditLoggingService.log_login(
+                user=existing_user,
+                success=False,
+                failure_reason='Invalid credentials',
+                request=request,
+            )
             return Response({'success': False, 'error': 'Invalid credentials'}, status=401)
-        
+
         # Log successful login
-        login_log = UserLoginLog.objects.create(
+        UserLoginLog.objects.create(
             user=user,
+            attempted_username=username,
             ip_address=ip_address,
             user_agent=user_agent,
             is_successful=True
         )
+        SecurityAuditLog.objects.create(
+            user=user,
+            event_type='login_success',
+            description='Successful login',
+            ip_address=ip_address,
+            user_agent=user_agent,
+            status='success',
+            metadata={'attempted_username': username},
+        )
+        AuditLoggingService.log_login(user=user, success=True, request=request)
         
         refresh = RefreshToken.for_user(user)
         return Response({
@@ -133,6 +173,8 @@ class LogoutView(APIView):
             token.blacklist()
         except:
             pass
+
+        AuditLoggingService.log_logout(user=request.user, request=request)
         
         return Response({'success': True, 'message': 'Logged out'})
 

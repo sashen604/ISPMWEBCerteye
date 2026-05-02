@@ -10,9 +10,11 @@ from django_filters.rest_framework import DjangoFilterBackend
 import csv
 import json
 
-from .models import Certificate
+from .models import Certificate, Domain, DomainScanHistory
 from .serializers import (
     CertificateSerializer,
+    DomainSerializer,
+    DomainScanHistorySerializer,
     InternalCertificatePayloadSerializer,
     InternalCertificateBatchSerializer,
     InternalCertificateIngestionResponseSerializer,
@@ -22,12 +24,13 @@ from .services import CertificateFetchService
 from .internal_service import InternalCertificateService, InternalCertificateError
 from .agent_auth import CertificateAgent, AgentAuditLog, AgentRateLimiter
 from apps.audit_logs.services import AuditLoggingService
+from apps.authentication.permissions import IsAdminOrReadOnly, IsAdminOrSuperAdmin
 
 
 class CertificateViewSet(viewsets.ModelViewSet):
     queryset = Certificate.objects.all()
     serializer_class = CertificateSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAdminOrReadOnly]
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['issuer', 'key_length', 'status', 'source_type', 'risk_level']
     search_fields = ['domain', 'hostname', 'issuer', 'subject']
@@ -68,7 +71,7 @@ class CertificateViewSet(viewsets.ModelViewSet):
 
         return queryset
     
-    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminOrSuperAdmin])
     def scan(self, request):
         """
         Scan a domain for SSL/TLS certificate and store in database.
@@ -169,7 +172,7 @@ class CertificateViewSet(viewsets.ModelViewSet):
         
         return super().destroy(request, *args, **kwargs)
     
-    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminOrSuperAdmin])
     def scan_batch(self, request):
         """
         Scan multiple domains for SSL/TLS certificates.
@@ -216,8 +219,7 @@ class CertificateViewSet(viewsets.ModelViewSet):
             if result['success']:
                 serializer = self.get_serializer(result['certificate'])
                 result['certificate'] = serializer.data
-        
-            return Response(results, status=status.HTTP_200_OK)
+        return Response(results, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def collect_internal(self, request):
@@ -635,7 +637,7 @@ class CertificateViewSet(viewsets.ModelViewSet):
         
         return response
     
-    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminOrSuperAdmin])
     def batch_update(self, request):
         """
         Batch update certificates (status, source_priority, etc).
@@ -721,7 +723,7 @@ class CertificateViewSet(viewsets.ModelViewSet):
         
         return Response(duplicates, status=status.HTTP_200_OK)
     
-    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated])
+    @action(detail=False, methods=['post'], permission_classes=[IsAuthenticated, IsAdminOrSuperAdmin])
     def merge_duplicates(self, request):
         """
         Merge duplicate certificates, keeping the one with highest source_priority.
@@ -903,3 +905,69 @@ class CertificateViewSet(viewsets.ModelViewSet):
         else:
             ip = request.META.get('REMOTE_ADDR', 'unknown')
         return ip
+
+
+class DomainViewSet(viewsets.ModelViewSet):
+    queryset = Domain.objects.all()
+    serializer_class = DomainSerializer
+    permission_classes = [IsAdminOrReadOnly]
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    filterset_fields = ["is_enabled", "last_status"]
+    search_fields = ["name"]
+    ordering_fields = ["name", "created_at", "last_scan_at", "updated_at"]
+    ordering = ["name"]
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsAdminOrSuperAdmin])
+    def enable(self, request, pk=None):
+        domain = self.get_object()
+        domain.is_enabled = True
+        domain.save(update_fields=["is_enabled", "updated_at"])
+        return Response({"success": True, "message": f"Domain {domain.name} enabled"})
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsAdminOrSuperAdmin])
+    def disable(self, request, pk=None):
+        domain = self.get_object()
+        domain.is_enabled = False
+        domain.save(update_fields=["is_enabled", "updated_at"])
+        return Response({"success": True, "message": f"Domain {domain.name} disabled"})
+
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsAdminOrSuperAdmin])
+    def scan(self, request, pk=None):
+        domain = self.get_object()
+        timeout = request.data.get("timeout", 10)
+        update_if_exists = request.data.get("update_if_exists", True)
+        service = CertificateFetchService(timeout=timeout)
+        result = service.scan_and_store(
+            domain.name,
+            update_if_exists=update_if_exists,
+            user=request.user,
+            request=request,
+            domain_obj=domain,
+        )
+        if result["success"]:
+            cert_data = CertificateSerializer(result["certificate"]).data
+            return Response(
+                {
+                    "success": True,
+                    "message": result["message"],
+                    "status": result["status"],
+                    "certificate": cert_data,
+                },
+                status=status.HTTP_201_CREATED if result["status"] == "created" else status.HTTP_200_OK,
+            )
+        return Response(
+            {
+                "success": False,
+                "message": result["message"],
+                "error": result.get("error"),
+                "error_type": result.get("error_type", "error"),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated], url_path="history")
+    def history(self, request, pk=None):
+        domain = self.get_object()
+        queryset = domain.scan_history.all()[:100]
+        serializer = DomainScanHistorySerializer(queryset, many=True)
+        return Response({"success": True, "count": len(serializer.data), "results": serializer.data})

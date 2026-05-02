@@ -10,6 +10,14 @@ class IsAdminUserRole(BasePermission):
         return bool(user and user.is_authenticated and user.is_admin())
 
 
+class IsAdminOrSuperAdmin(BasePermission):
+    """Allow only admin/superadmin users."""
+
+    def has_permission(self, request, view):
+        user = request.user
+        return bool(user and user.is_authenticated and user.is_admin())
+
+
 class IsSuperAdmin(BasePermission):
     """Only SuperAdmin users can access"""
     def has_permission(self, request, view):
@@ -21,6 +29,6 @@ class IsAdminOrReadOnly(BasePermission):
     """Admin can modify, others read-only"""
     def has_permission(self, request, view):
         if request.method in ['GET', 'HEAD', 'OPTIONS']:
-            return True
+            return bool(request.user and request.user.is_authenticated)
         user = request.user
         return bool(user and user.is_authenticated and user.is_admin())

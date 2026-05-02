@@ -60,7 +60,8 @@ class User(AbstractUser):
 
 class UserLoginLog(models.Model):
     """Track user login/logout activities"""
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='login_logs')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='login_logs', null=True, blank=True)
+    attempted_username = models.CharField(max_length=150, blank=True, default='', db_index=True)
     login_time = models.DateTimeField(auto_now_add=True)
     logout_time = models.DateTimeField(null=True, blank=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
@@ -78,7 +79,8 @@ class UserLoginLog(models.Model):
 
     def __str__(self):
         status = 'SUCCESS' if self.is_successful else 'FAILED'
-        return f"{self.user.username} - {self.login_time} ({status})"
+        username = self.user.username if self.user else (self.attempted_username or 'unknown')
+        return f"{username} - {self.login_time} ({status})"
 
 
 class UserRegistrationLog(models.Model):

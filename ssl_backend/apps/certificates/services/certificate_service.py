@@ -6,16 +6,24 @@ Coordinates fetcher and parser modules, handles risk scoring, and manages databa
 """
 
 from typing import Optional, Dict, Any
-from datetime import datetime, timezone
 
 from django.utils import timezone as django_timezone
 from django.db import transaction
 
-from apps.certificates.models import Certificate
-from apps.certificates.fetchers import SSLCertificateFetcher, CertificateFetchError, clean_domain
+from apps.certificates.models import Certificate, Domain, DomainScanHistory
+from apps.certificates.fetchers import (
+    SSLCertificateFetcher,
+    CertificateFetchError,
+    ConnectionTimeoutError,
+    DNSResolutionError,
+    InvalidCertificateError,
+    clean_domain,
+)
 from apps.certificates.parsers import CertificateParser, CertificateParsingError
+from apps.certificates.crypto_health import analyze_certificate_health
 from apps.risk_engine.services import RiskScoringEngine
 from apps.audit_logs.services import AuditLoggingService
+from apps.alerts.services import AlertEngine
 
 
 class CertificateFetchService:
@@ -44,7 +52,14 @@ class CertificateFetchService:
         self.fetcher = SSLCertificateFetcher(timeout=timeout)
         self.timeout = timeout
     
-    def scan_and_store(self, domain: str, update_if_exists: bool = True, user=None, request=None) -> Dict[str, Any]:
+    def scan_and_store(
+        self,
+        domain: str,
+        update_if_exists: bool = True,
+        user=None,
+        request=None,
+        domain_obj: Optional[Domain] = None,
+    ) -> Dict[str, Any]:
         """
         Scan a domain for SSL certificate and store in database.
         
@@ -94,17 +109,12 @@ class CertificateFetchService:
             
             # Step 2: Parse certificate
             cert_data = CertificateParser.parse_certificate(x509_cert, domain)
-            
-            # Step 3: Calculate risk score
-            cert_data['risk_level'], cert_data['risk_score'] = self._calculate_risk(cert_data)
-            
-            # Step 4: Get risk reasoning for audit trail
-            cert_data['risk_reasoning'] = RiskScoringEngine.get_risk_reasoning(
-                valid_to=cert_data.get('valid_to'),
-                key_length=cert_data.get('key_length', 2048),
-                is_self_signed=cert_data.get('certificate_type') == 'self-signed',
-                algorithm=cert_data.get('signature_algorithm', '')
-            )
+
+            # Step 3: Analyze cryptographic health (for score + explainability)
+            cert_data['crypto_findings'] = self._extract_crypto_findings(x509_cert)
+
+            # Step 4: Calculate weighted risk score + reasons
+            cert_data['risk_level'], cert_data['risk_score'], cert_data['risk_reasoning'] = self._calculate_risk(cert_data)
             
             # Step 5: Store in database with transaction
             with transaction.atomic():
@@ -152,39 +162,97 @@ class CertificateFetchService:
             
             status = 'created' if created else 'updated'
             message = f"Certificate for {domain} {'created' if created else 'updated'} successfully"
-            
-            return {
+            response = {
                 'success': True,
                 'message': message,
                 'certificate': certificate,
                 'status': status,
                 'error': None,
             }
+            try:
+                AlertEngine().trigger_risk_alert(certificate, trigger_source='immediate')
+            except Exception:
+                # Alerting must not block certificate ingestion.
+                pass
+            self._create_scan_history(
+                domain_obj,
+                {
+                    "success": True,
+                    "certificate": certificate,
+                    "risk_score": certificate.risk_score,
+                    "risk_level": certificate.risk_level,
+                    "risk_reasoning": certificate.risk_reasoning,
+                    "parsed_data": cert_data,
+                },
+            )
+            return response
             
-        except CertificateFetchError as e:
-            return {
+        except ConnectionTimeoutError as e:
+            failure = {
                 'success': False,
                 'message': f"Failed to fetch certificate from {domain}",
                 'certificate': None,
                 'status': 'error',
                 'error': str(e),
+                'error_type': 'timeout',
             }
+            self._create_scan_history(domain_obj, failure)
+            return failure
+        except DNSResolutionError as e:
+            failure = {
+                'success': False,
+                'message': f"Failed to fetch certificate from {domain}",
+                'certificate': None,
+                'status': 'error',
+                'error': str(e),
+                'error_type': 'invalid_domain',
+            }
+            self._create_scan_history(domain_obj, failure)
+            return failure
+        except InvalidCertificateError as e:
+            failure = {
+                'success': False,
+                'message': f"Failed to fetch certificate from {domain}",
+                'certificate': None,
+                'status': 'error',
+                'error': str(e),
+                'error_type': 'ssl_error',
+            }
+            self._create_scan_history(domain_obj, failure)
+            return failure
+        except CertificateFetchError as e:
+            failure = {
+                'success': False,
+                'message': f"Failed to fetch certificate from {domain}",
+                'certificate': None,
+                'status': 'error',
+                'error': str(e),
+                'error_type': 'fetch_error',
+            }
+            self._create_scan_history(domain_obj, failure)
+            return failure
         except CertificateParsingError as e:
-            return {
+            failure = {
                 'success': False,
                 'message': f"Failed to parse certificate from {domain}",
                 'certificate': None,
                 'status': 'error',
                 'error': str(e),
+                'error_type': 'parse_error',
             }
+            self._create_scan_history(domain_obj, failure)
+            return failure
         except Exception as e:
-            return {
+            failure = {
                 'success': False,
                 'message': f"Unexpected error scanning {domain}",
                 'certificate': None,
                 'status': 'error',
                 'error': str(e),
+                'error_type': 'unexpected_error',
             }
+            self._create_scan_history(domain_obj, failure)
+            return failure
     
     def scan_multiple(self, domains: list, update_if_exists: bool = True) -> Dict[str, Any]:
         """
@@ -297,15 +365,52 @@ class CertificateFetchService:
         # Determine if self-signed
         is_self_signed = cert_type == 'self-signed'
         
-        # Use unified risk scoring engine
-        risk_score = RiskScoringEngine.calculate_risk_score(
+        days_remaining = cert_data.get("days_remaining", 0)
+        crypto_findings = cert_data.get("crypto_findings", {})
+
+        weighted = RiskScoringEngine.calculate_weighted_risk(
+            days_remaining=days_remaining,
             valid_to=valid_to,
             key_length=key_length,
             is_self_signed=is_self_signed,
-            algorithm=algorithm
+            algorithm=algorithm,
+            crypto_findings=crypto_findings,
+            valid_from=cert_data.get("valid_from"),
         )
-        
-        # Get risk level (already uppercase from engine)
-        risk_level = RiskScoringEngine.determine_risk_level(risk_score)
-        
-        return risk_level, risk_score
+        return weighted["risk_level"], weighted["total_score"], weighted
+
+    def _extract_crypto_findings(self, x509_cert) -> Dict[str, Any]:
+        """Run crypto health analysis and fail-safe on parser issues."""
+        try:
+            cert_obj = x509_cert.to_cryptography()
+            return analyze_certificate_health(cert_obj)
+        except Exception as exc:
+            return {
+                "issues": [f"Failed to analyze crypto health: {exc}"],
+                "is_weak_algorithm": False,
+                "is_weak_key": False,
+            }
+
+    def _create_scan_history(self, domain_obj: Optional[Domain], result: Dict[str, Any]) -> None:
+        """Persist scan history rows for managed domains only."""
+        if not domain_obj:
+            return
+
+        now = django_timezone.now()
+        certificate = result.get("certificate")
+        is_success = bool(result.get("success"))
+
+        DomainScanHistory.objects.create(
+            domain=domain_obj,
+            scanned_at=now,
+            status=DomainScanHistory.STATUS_SUCCESS if is_success else DomainScanHistory.STATUS_FAILED,
+            error_message=None if is_success else result.get("error"),
+            certificate=certificate,
+            parsed_data=result.get("parsed_data", {}),
+            risk_score=result.get("risk_score", getattr(certificate, "risk_score", 0) or 0),
+            risk_level=result.get("risk_level", getattr(certificate, "risk_level", "") or ""),
+            risk_reasoning=result.get("risk_reasoning", getattr(certificate, "risk_reasoning", {}) or {}),
+        )
+        domain_obj.last_scan_at = now
+        domain_obj.last_status = "success" if is_success else "failed"
+        domain_obj.save(update_fields=["last_scan_at", "last_status", "updated_at"])

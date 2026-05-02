@@ -3,7 +3,7 @@ AD CS Serializers - REST API serializers for AD CS operations.
 """
 
 from rest_framework import serializers
-from .models_adcs import ADCSSource, ADCSSyncHistory, ADCSConnectionTest
+from .models_adcs import ADCSSource, ADCSSyncHistory, ADCSConnectionTest, ADCSCredentialHistory
 
 
 class ADCSSourceSerializer(serializers.ModelSerializer):
@@ -52,6 +52,19 @@ class ADCSSourceSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at'
         ]
+
+    def validate(self, attrs):
+        """
+        Keep WinRM transport settings consistent:
+        - 5985 => HTTP (use_ssl=False)
+        - 5986 => HTTPS (use_ssl=True)
+        """
+        port = attrs.get('port', getattr(self.instance, 'port', 5985))
+        if port == 5985:
+            attrs['use_ssl'] = False
+        elif port == 5986:
+            attrs['use_ssl'] = True
+        return attrs
         read_only_fields = [
             'id',
             'connection_status',
@@ -74,20 +87,61 @@ class ADCSSourceSerializer(serializers.ModelSerializer):
         
         # Encrypt password
         validated_data['encrypted_password'] = ADCSCredentialEncryption.encrypt(password)
-        
-        return super().create(validated_data)
+
+        source = super().create(validated_data)
+
+        request = self.context.get("request")
+        ADCSCredentialHistory.objects.create(
+            source=source,
+            changed_by=getattr(request, "user", None),
+            change_type='password_updated',
+            password_hash=ADCSCredentialEncryption.hash_password(password),
+            ip_address=(request.META.get('REMOTE_ADDR', '') if request else ''),
+        )
+        return source
     
     def update(self, instance, validated_data):
         """Update AD CS source with encrypted password if provided."""
         from .adcs_crypto import ADCSCredentialEncryption
         
         password = validated_data.pop('password', '')
+        username_changed = 'username' in validated_data and validated_data.get('username') != instance.username
+        auth_type_changed = 'auth_type' in validated_data and validated_data.get('auth_type') != instance.auth_type
         
         # Only encrypt password if it's provided
         if password:
             validated_data['encrypted_password'] = ADCSCredentialEncryption.encrypt(password)
-        
-        return super().update(instance, validated_data)
+
+        source = super().update(instance, validated_data)
+
+        request = self.context.get("request")
+        changed_by = getattr(request, "user", None)
+        ip_address = request.META.get('REMOTE_ADDR', '') if request else ''
+        if password:
+            ADCSCredentialHistory.objects.create(
+                source=source,
+                changed_by=changed_by,
+                change_type='password_updated',
+                password_hash=ADCSCredentialEncryption.hash_password(password),
+                ip_address=ip_address,
+            )
+        if username_changed:
+            ADCSCredentialHistory.objects.create(
+                source=source,
+                changed_by=changed_by,
+                change_type='username_updated',
+                password_hash='',
+                ip_address=ip_address,
+            )
+        if auth_type_changed:
+            ADCSCredentialHistory.objects.create(
+                source=source,
+                changed_by=changed_by,
+                change_type='auth_type_changed',
+                password_hash='',
+                ip_address=ip_address,
+            )
+        return source
 
 
 class ADCSConnectionTestSerializer(serializers.ModelSerializer):

@@ -59,12 +59,17 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 
 class UserLoginLogSerializer(serializers.ModelSerializer):
-    username = serializers.CharField(source='user.username', read_only=True)
+    username = serializers.SerializerMethodField()
     
     class Meta:
         model = UserLoginLog
-        fields = ['id', 'username', 'login_time', 'logout_time', 'ip_address', 'is_successful', 'failure_reason', 'session_duration']
+        fields = ['id', 'username', 'attempted_username', 'login_time', 'logout_time', 'ip_address', 'is_successful', 'failure_reason', 'session_duration']
         read_only_fields = ['id', 'login_time', 'logout_time', 'session_duration']
+
+    def get_username(self, obj):
+        if obj.user:
+            return obj.user.username
+        return obj.attempted_username
 
 
 class UserRegistrationLogSerializer(serializers.ModelSerializer):

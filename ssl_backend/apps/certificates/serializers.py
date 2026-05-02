@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Certificate
+from .models import Certificate, Domain, DomainScanHistory
 
 
 class CertificateSerializer(serializers.ModelSerializer):
@@ -10,9 +10,47 @@ class CertificateSerializer(serializers.ModelSerializer):
             'serial_number', 'signature_algorithm', 'key_length', 'valid_from',
             'valid_to', 'days_remaining', 'risk_level', 'risk_score', 'last_scanned',
             'source_type', 'status', 'thumbprint', 'template_name', 'agent_id',
-            'source_priority', 'certificate_chain', 'last_verified', 'created_at', 'updated_at'
+            'source_priority', 'certificate_chain', 'last_verified', 'is_self_signed',
+            'san_list', 'crypto_findings', 'risk_reasoning', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'days_remaining', 'risk_level', 'risk_score', 'created_at', 'updated_at']
+
+
+class DomainSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Domain
+        fields = [
+            "id",
+            "name",
+            "is_enabled",
+            "last_scan_at",
+            "last_status",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "last_scan_at", "last_status", "created_at", "updated_at"]
+
+
+class DomainScanHistorySerializer(serializers.ModelSerializer):
+    domain_name = serializers.CharField(source="domain.name", read_only=True)
+
+    class Meta:
+        model = DomainScanHistory
+        fields = [
+            "id",
+            "domain",
+            "domain_name",
+            "scanned_at",
+            "status",
+            "error_message",
+            "certificate",
+            "parsed_data",
+            "risk_score",
+            "risk_level",
+            "risk_reasoning",
+            "created_at",
+        ]
+        read_only_fields = fields
 
 
 class InternalCertificatePayloadSerializer(serializers.Serializer):

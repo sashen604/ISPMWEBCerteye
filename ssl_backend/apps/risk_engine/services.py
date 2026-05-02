@@ -14,9 +14,9 @@ Risk scores are 0-100 with clear thresholds mapping to levels:
 - LOW (0-24): Routine monitoring
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from django.utils import timezone
-from typing import Dict, Tuple, Optional
+from typing import Dict, Optional, Any
 
 
 class RiskScoringEngine:
@@ -46,12 +46,11 @@ class RiskScoringEngine:
         'self_signed_penalty': 25,  # Self-signed certificate: add 25 points
     }
     
-    # Risk level mapping thresholds
-    RISK_LEVEL_THRESHOLDS = {
-        'CRITICAL': 75,  # 75-100
-        'HIGH': 50,  # 50-74
-        'MEDIUM': 25,  # 25-49
-        'LOW': 0,  # 0-24
+    # Weighted scoring model
+    WEIGHTS = {
+        'expiry': 0.5,
+        'crypto': 0.35,
+        'validity': 0.15,
     }
     
     @classmethod
@@ -87,42 +86,167 @@ class RiskScoringEngine:
         Returns:
             Risk score (0-100), deterministic based on inputs
         """
-        score = 0
         now = timezone.now()
         days_remaining = (valid_to - now).days
-        
-        # PRIMARY FACTOR: Expiry (most important)
+        expiry_score = cls.get_expiry_score(days_remaining)
+        crypto_score = cls.get_crypto_score(
+            key_length=key_length,
+            is_self_signed=is_self_signed,
+            algorithm=algorithm,
+            crypto_findings=None,
+        )
+        validity_score = cls.get_validity_score(valid_to=valid_to)
+        weighted_score = (
+            cls.WEIGHTS['expiry'] * expiry_score
+            + cls.WEIGHTS['crypto'] * crypto_score
+            + cls.WEIGHTS['validity'] * validity_score
+        )
+        return cls._normalize_score(weighted_score)
+
+    @classmethod
+    def get_expiry_score(cls, days_remaining: int) -> int:
+        """Convert remaining days to expiry risk sub-score (0-100)."""
         if days_remaining <= 0:
-            score = 100  # Expired
-        elif days_remaining < 7:
-            score = 90   # < 7 days: CRITICAL
-        elif days_remaining < 30:
-            score = 75   # < 30 days: HIGH
-        elif days_remaining < 90:
-            score = 50   # < 90 days: MEDIUM
-        else:
-            score = 0    # >= 90 days: LOW baseline
-        
-        # SECONDARY FACTORS: Penalties to add on top
-        
-        # Key strength penalty
-        if key_length < 2048:
-            score += 40  # Weak key
-        # 2048-3071: no penalty (standard)
-        # 3072+: no penalty (strong)
-        
-        # Self-signing penalty
+            return 100
+        if days_remaining < 7:
+            return 95
+        if days_remaining < 30:
+            return 80
+        if days_remaining < 90:
+            return 55
+        if days_remaining < 180:
+            return 25
+        return 5
+
+    @classmethod
+    def get_crypto_score(
+        cls,
+        key_length: int,
+        is_self_signed: bool = False,
+        algorithm: Optional[str] = None,
+        crypto_findings: Optional[Dict[str, Any]] = None,
+    ) -> int:
+        """Convert crypto findings into a 0-100 crypto risk sub-score."""
+        score = 0
+        algorithm_text = (algorithm or "").lower()
+        weak_algorithm_tokens = ("md5", "sha1")
+
+        if key_length and key_length < 2048:
+            score += 50
+        elif key_length and key_length < 3072:
+            score += 20
+
         if is_self_signed:
-            score += 25
-        
-        # Algorithm penalty
-        if algorithm:
-            weak_algorithms = ['md5WithRSAEncryption', 'sha1WithRSAEncryption']
-            if any(weak in algorithm.lower() for weak in weak_algorithms):
+            score += 20
+
+        if any(token in algorithm_text for token in weak_algorithm_tokens):
+            score += 30
+
+        if isinstance(crypto_findings, dict):
+            issues = crypto_findings.get("issues", [])
+            if isinstance(issues, list):
+                score += min(len(issues) * 8, 40)
+            if crypto_findings.get("is_weak_key"):
                 score += 20
-        
-        # Cap at 100
-        return min(score, 100)
+            if crypto_findings.get("is_weak_algorithm"):
+                score += 25
+
+        return cls._normalize_score(score)
+
+    @classmethod
+    def get_validity_score(
+        cls,
+        valid_to: datetime,
+        valid_from: Optional[datetime] = None,
+        validity_ok: Optional[bool] = None,
+    ) -> int:
+        """Return 100 when validity checks fail, otherwise 0."""
+        if validity_ok is not None:
+            return 100 if not validity_ok else 0
+
+        now = timezone.now()
+        if valid_to <= now:
+            return 100
+        if valid_from and valid_from > now:
+            return 100
+        return 0
+
+    @classmethod
+    def calculate_weighted_risk(
+        cls,
+        *,
+        days_remaining: int,
+        valid_to: datetime,
+        key_length: int,
+        is_self_signed: bool = False,
+        algorithm: Optional[str] = None,
+        crypto_findings: Optional[Dict[str, Any]] = None,
+        valid_from: Optional[datetime] = None,
+        validity_ok: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compute weighted risk score and explain why.
+
+        Formula:
+            R = 0.5*expiry + 0.35*crypto + 0.15*validity
+        """
+        expiry_score = cls.get_expiry_score(days_remaining)
+        crypto_score = cls.get_crypto_score(
+            key_length=key_length,
+            is_self_signed=is_self_signed,
+            algorithm=algorithm,
+            crypto_findings=crypto_findings,
+        )
+        validity_score = cls.get_validity_score(
+            valid_to=valid_to,
+            valid_from=valid_from,
+            validity_ok=validity_ok,
+        )
+        weighted_value = (
+            cls.WEIGHTS["expiry"] * expiry_score
+            + cls.WEIGHTS["crypto"] * crypto_score
+            + cls.WEIGHTS["validity"] * validity_score
+        )
+        total_score = cls._normalize_score(weighted_value)
+        risk_level = cls.determine_risk_level(total_score)
+
+        reasons = []
+        if days_remaining <= 0:
+            reasons.append("Certificate is already expired")
+        elif days_remaining < 30:
+            reasons.append(f"Certificate expires soon ({days_remaining} days remaining)")
+        elif days_remaining < 90:
+            reasons.append(f"Certificate has medium expiry exposure ({days_remaining} days remaining)")
+
+        if crypto_score >= 70:
+            reasons.append("Cryptographic posture is weak (algorithm/key/self-signed findings)")
+        elif crypto_score >= 35:
+            reasons.append("Cryptographic posture has moderate weaknesses")
+
+        if validity_score == 100:
+            reasons.append("Certificate validity check failed")
+        else:
+            reasons.append("Certificate validity window is currently valid")
+
+        return {
+            "weights": cls.WEIGHTS.copy(),
+            "components": {
+                "expiry": expiry_score,
+                "crypto": crypto_score,
+                "validity": validity_score,
+            },
+            "weighted_formula": (
+                f"0.5*{expiry_score} + 0.35*{crypto_score} + 0.15*{validity_score}"
+            ),
+            "weighted_raw_score": round(weighted_value, 2),
+            "total_score": total_score,
+            "risk_level": risk_level,
+            "risk_reasons": reasons,
+        }
+
+    @staticmethod
+    def _normalize_score(value: float) -> int:
+        return max(0, min(100, int(round(value))))
     
     @classmethod
     def determine_risk_level(cls, risk_score: int) -> str:
@@ -191,80 +315,22 @@ class RiskScoringEngine:
         """
         now = timezone.now()
         days_remaining = (valid_to - now).days
-        
-        reasoning = {
-            'expiry_days': days_remaining,
-            'expiry_penalty': 0,
-            'expiry_factor': 'Unknown',
-            'key_length': key_length,
-            'key_penalty': 0,
-            'key_factor': 'Unknown',
-            'self_signed': is_self_signed,
-            'self_signed_penalty': 0,
-            'algorithm': algorithm or 'Unknown',
-            'algorithm_penalty': 0,
-            'algorithm_factor': 'Unknown',
-            'risk_reasons': [],
-        }
-        
-        # Expiry factor
-        if days_remaining <= 0:
-            reasoning['expiry_penalty'] = 100
-            reasoning['expiry_factor'] = 'Expired'
-            reasoning['risk_reasons'].append(f'Certificate already expired {abs(days_remaining)} days ago')
-        elif days_remaining < cls.THRESHOLDS['critical_expiry']:
-            reasoning['expiry_penalty'] = 90
-            reasoning['expiry_factor'] = 'Critical (< 7 days)'
-            reasoning['risk_reasons'].append(f'Expires in {days_remaining} days (critical)')
-        elif days_remaining < cls.THRESHOLDS['high_expiry']:
-            reasoning['expiry_penalty'] = 75
-            reasoning['expiry_factor'] = 'High (< 30 days)'
-            reasoning['risk_reasons'].append(f'Expires in {days_remaining} days (high priority)')
-        elif days_remaining < cls.THRESHOLDS['medium_expiry']:
-            reasoning['expiry_penalty'] = 50
-            reasoning['expiry_factor'] = 'Medium (< 90 days)'
-            reasoning['risk_reasons'].append(f'Expires in {days_remaining} days (medium priority)')
-        else:
-            reasoning['expiry_penalty'] = 0
-            reasoning['expiry_factor'] = 'Low (> 90 days)'
-            reasoning['risk_reasons'].append(f'Expires in {days_remaining} days (acceptable)')
-        
-        # Key strength factor
-        if key_length < cls.THRESHOLDS['weak_key']:
-            reasoning['key_penalty'] = 40
-            reasoning['key_factor'] = f'Weak ({key_length} bits)'
-            reasoning['risk_reasons'].append(f'Weak key length: {key_length} bits (recommended >= 2048)')
-        elif key_length < cls.THRESHOLDS['medium_key']:
-            reasoning['key_penalty'] = 15
-            reasoning['key_factor'] = f'Moderate ({key_length} bits)'
-            reasoning['risk_reasons'].append(f'Moderate key length: {key_length} bits')
-        else:
-            reasoning['key_penalty'] = 0
-            reasoning['key_factor'] = f'Strong ({key_length} bits)'
-            reasoning['risk_reasons'].append(f'Strong key length: {key_length} bits')
-        
-        # Self-signed factor
-        if is_self_signed:
-            reasoning['self_signed_penalty'] = cls.THRESHOLDS['self_signed_penalty']
-            reasoning['risk_reasons'].append('Self-signed certificate (not from trusted CA)')
-        
-        # Algorithm factor
-        if algorithm:
-            weak_algorithms = ['md5WithRSAEncryption', 'sha1WithRSAEncryption']
-            if any(weak in algorithm.lower() for weak in weak_algorithms):
-                reasoning['algorithm_penalty'] = 20
-                reasoning['algorithm_factor'] = f'Weak ({algorithm})'
-                reasoning['risk_reasons'].append(f'Weak algorithm: {algorithm}')
-            else:
-                reasoning['algorithm_penalty'] = 0
-                reasoning['algorithm_factor'] = f'Strong ({algorithm})'
-        
-        # Calculate total and risk level
-        total = cls.calculate_risk_score(valid_to, key_length, is_self_signed, algorithm)
-        reasoning['total_score'] = total
-        reasoning['risk_level'] = cls.determine_risk_level(total)
-        
-        return reasoning
+        weighted = cls.calculate_weighted_risk(
+            days_remaining=days_remaining,
+            valid_to=valid_to,
+            key_length=key_length,
+            is_self_signed=is_self_signed,
+            algorithm=algorithm,
+        )
+        weighted.update(
+            {
+                "expiry_days": days_remaining,
+                "key_length": key_length,
+                "self_signed": is_self_signed,
+                "algorithm": algorithm or "Unknown",
+            }
+        )
+        return weighted
     
     @classmethod
     def update_thresholds(cls, new_thresholds: Dict) -> None:

@@ -33,7 +33,7 @@ class ADCSIntegrationService:
         try:
             # Decrypt password for connection
             try:
-                password = ADCSCredentialEncryption.decrypt(source.encrypted_password)
+                password = ADCSIntegrationService._get_source_password(source)
             except Exception as e:
                 logger.error(f"Failed to decrypt password: {str(e)}")
                 return {
@@ -102,6 +102,31 @@ class ADCSIntegrationService:
                 'message': f'Error during connection test: {str(e)}',
                 'details': []
             }
+
+    @staticmethod
+    def run_feature_checklist(source: ADCSSource) -> Dict:
+        """
+        Run PowerShell-based AD CS verification checklist remotely.
+        """
+        try:
+            password = ADCSIntegrationService._get_source_password(source)
+            connector = ADCSConnectorFactory.create_connector(source, password=password)
+            if not hasattr(connector, "run_feature_verification"):
+                return {
+                    "success": False,
+                    "message": f"Connector type '{source.auth_type}' does not support PowerShell checklist",
+                    "checks": {},
+                }
+            result = connector.run_feature_verification()
+            connector.close()
+            return result
+        except Exception as exc:
+            logger.error(f"Feature checklist failed: {exc}")
+            return {
+                "success": False,
+                "message": f"Feature checklist failed: {exc}",
+                "checks": {},
+            }
     
     @staticmethod
     @transaction.atomic
@@ -119,19 +144,9 @@ class ADCSIntegrationService:
         }
         
         try:
-            # First, test connection
-            connection_status = ADCSIntegrationService.test_connection(source, user, ip_address)
-            if not connection_status['success']:
-                logger.warning(f"Cannot sync - connection test failed: {source.source_name}")
-                return {
-                    'success': False,
-                    'message': 'Connection test failed before sync',
-                    'stats': stats
-                }
-            
             # Decrypt password
             try:
-                password = ADCSCredentialEncryption.decrypt(source.encrypted_password)
+                password = ADCSIntegrationService._get_source_password(source)
             except Exception as e:
                 logger.error(f"Failed to decrypt password: {str(e)}")
                 return {
@@ -140,8 +155,28 @@ class ADCSIntegrationService:
                     'stats': stats
                 }
             
-            # Create connector and fetch certificates
+            # Create connector and test + fetch certificates
             connector = ADCSConnectorFactory.create_connector(source, password=password)
+            success, message = connector.test_connection()
+            if not success:
+                connector.close()
+                logger.warning(f"Cannot sync - connection test failed: {source.source_name}")
+                ADCSConnectionTest.objects.create(
+                    source=source,
+                    test_results={
+                        'timestamp': timezone.now().isoformat(),
+                        'auth_type': source.auth_type,
+                        'server': source.server_hostname,
+                        'ca_name': source.ca_name
+                    },
+                    overall_status='failed',
+                    message=message
+                )
+                return {
+                    'success': False,
+                    'message': 'Connection test failed before sync',
+                    'stats': stats
+                }
             certificates = connector.fetch_certificates()
             connector.close()
             
@@ -426,3 +461,13 @@ class ADCSIntegrationService:
             algorithm=signature_algorithm,
         )
         return level, score, reasoning
+
+    @staticmethod
+    def _get_source_password(source: ADCSSource) -> str:
+        """
+        Centralized secure retrieval for ADCS credentials.
+        Keeps decryption in one place for future key rotation/KMS integrations.
+        """
+        if not source.encrypted_password:
+            raise ValueError("Encrypted password is missing for ADCS source")
+        return ADCSCredentialEncryption.decrypt(source.encrypted_password)

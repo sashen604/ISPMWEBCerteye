@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from .models import RiskConfiguration
 from .serializers import RiskConfigurationSerializer
 from apps.risk_engine.services import RiskScoringEngine
+from apps.authentication.permissions import IsAdminOrSuperAdmin
 
 User = get_user_model()
 
@@ -121,7 +122,7 @@ class RiskAnalysisView(APIView):
     POST: Calculate risk score for given certificate parameters
     """
     
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, IsAdminOrSuperAdmin]
     
     def post(self, request):
         """

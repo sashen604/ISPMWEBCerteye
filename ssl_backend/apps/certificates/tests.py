@@ -10,11 +10,16 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from datetime import timedelta
 import json
+from rest_framework.test import APIClient
 
 from apps.certificates.models import Certificate
 from apps.certificates.services import CertificateExportService
+from apps.certificates.models import Domain, DomainScanHistory
+from apps.certificates.tasks import scan_all_enabled_domains_task
 from apps.alerts.models import Alert
 from apps.alerts.services import AlertEngine
+from apps.risk_engine.services import RiskScoringEngine
+from unittest.mock import patch
 
 User = get_user_model()
 
@@ -217,13 +222,14 @@ class CertificateExportAPITestCase(TestCase):
     
     def setUp(self):
         """Set up test client and user."""
-        self.client = Client()
+        self.client = APIClient()
         self.user = User.objects.create_user(
-            username='testuser',
-            email='test@test.com',
+            username='testuser_export',
+            email='test_export@test.com',
             password='testpass123',
             role='admin'
         )
+        self.client.force_authenticate(user=self.user)
         
         # Create test certificate
         now = timezone.now()
@@ -246,9 +252,6 @@ class CertificateExportAPITestCase(TestCase):
     
     def test_export_csv_all_endpoint(self):
         """Test CSV export endpoint with 'all' filter."""
-        # Login
-        self.client.login(username='testuser', password='testpass123')
-        
         # Make request
         response = self.client.get('/api/certificates/export_csv/?filter_type=all')
         
@@ -259,7 +262,6 @@ class CertificateExportAPITestCase(TestCase):
     
     def test_export_csv_expiring_endpoint(self):
         """Test CSV export endpoint with 'expiring' filter."""
-        self.client.login(username='testuser', password='testpass123')
         response = self.client.get('/api/certificates/export_csv/?filter_type=expiring&days_threshold=30')
         
         # Certificate expires in 180 days, so shouldn't be included
@@ -271,13 +273,14 @@ class AlertAPITestCase(TestCase):
     
     def setUp(self):
         """Set up test client and user."""
-        self.client = Client()
+        self.client = APIClient()
         self.admin_user = User.objects.create_user(
             username='adminuser',
             email='admin@test.com',
             password='adminpass123',
             role='superadmin'
         )
+        self.client.force_authenticate(user=self.admin_user)
         
         # Create test alert
         self.alert = Alert.objects.create(
@@ -290,7 +293,6 @@ class AlertAPITestCase(TestCase):
     
     def test_get_alerts_endpoint(self):
         """Test getting alerts."""
-        self.client.login(username='adminuser', password='adminpass123')
         response = self.client.get('/api/alerts/')
         
         self.assertEqual(response.status_code, 200)
@@ -300,10 +302,87 @@ class AlertAPITestCase(TestCase):
     
     def test_alert_statistics_endpoint(self):
         """Test getting alert statistics."""
-        self.client.login(username='adminuser', password='adminpass123')
         response = self.client.get('/api/alerts/stats/')
         
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertTrue(data['success'])
         self.assertIn('statistics', data)
+
+
+class WeightedRiskScoringTestCase(TestCase):
+    def test_risk_classification_boundaries(self):
+        self.assertEqual(RiskScoringEngine.determine_risk_level(25), "LOW")
+        self.assertEqual(RiskScoringEngine.determine_risk_level(26), "MEDIUM")
+        self.assertEqual(RiskScoringEngine.determine_risk_level(50), "MEDIUM")
+        self.assertEqual(RiskScoringEngine.determine_risk_level(51), "HIGH")
+        self.assertEqual(RiskScoringEngine.determine_risk_level(75), "HIGH")
+        self.assertEqual(RiskScoringEngine.determine_risk_level(76), "CRITICAL")
+
+    def test_weighted_reasons_payload(self):
+        result = RiskScoringEngine.calculate_weighted_risk(
+            days_remaining=5,
+            valid_to=timezone.now() + timedelta(days=5),
+            key_length=1024,
+            is_self_signed=True,
+            algorithm="sha1WithRSAEncryption",
+            crypto_findings={"issues": ["weak key"], "is_weak_key": True, "is_weak_algorithm": True},
+        )
+        self.assertIn("components", result)
+        self.assertIn("weighted_formula", result)
+        self.assertIn("risk_reasons", result)
+        self.assertGreaterEqual(result["total_score"], 0)
+        self.assertLessEqual(result["total_score"], 100)
+
+
+class DomainManagementAPITestCase(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            username="domainadmin",
+            email="domainadmin@test.com",
+            password="testpass123",
+            role="admin",
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_domain_crud_and_toggle(self):
+        create_res = self.client.post(
+            "/api/certificates/domains/",
+            data=json.dumps({"name": "example.org", "is_enabled": True}),
+            content_type="application/json",
+        )
+        self.assertEqual(create_res.status_code, 201)
+        domain_id = create_res.json()["id"]
+
+        disable_res = self.client.post(f"/api/certificates/domains/{domain_id}/disable/")
+        self.assertEqual(disable_res.status_code, 200)
+        enable_res = self.client.post(f"/api/certificates/domains/{domain_id}/enable/")
+        self.assertEqual(enable_res.status_code, 200)
+
+        delete_res = self.client.delete(f"/api/certificates/domains/{domain_id}/")
+        self.assertEqual(delete_res.status_code, 204)
+
+
+class DomainScanHistoryAndTasksTestCase(TestCase):
+    def setUp(self):
+        self.domain_enabled = Domain.objects.create(name="enabled.example.com", is_enabled=True)
+        self.domain_disabled = Domain.objects.create(name="disabled.example.com", is_enabled=False)
+
+    @patch("apps.certificates.tasks.scan_domain_task.delay")
+    def test_periodic_scheduler_queues_only_enabled_domains(self, delay_mock):
+        result = scan_all_enabled_domains_task()
+        self.assertEqual(result["scheduled_count"], 1)
+        delay_mock.assert_called_once_with(self.domain_enabled.id)
+
+    def test_history_model_persists_snapshots(self):
+        history = DomainScanHistory.objects.create(
+            domain=self.domain_enabled,
+            status=DomainScanHistory.STATUS_SUCCESS,
+            parsed_data={"subject": "CN=enabled.example.com"},
+            risk_score=44,
+            risk_level="MEDIUM",
+            risk_reasoning={"risk_reasons": ["test"]},
+        )
+        self.assertEqual(history.domain, self.domain_enabled)
+        self.assertEqual(history.risk_level, "MEDIUM")

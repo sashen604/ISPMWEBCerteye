@@ -90,7 +90,8 @@ class WinRMConnector(ADCSConnector):
         return deduped
 
     def _endpoint(self) -> str:
-        scheme = 'https' if self.source.use_ssl else 'http'
+        # Port 5986 is the secure WinRM endpoint; prefer https even if source flag is stale.
+        scheme = 'https' if (self.source.use_ssl or int(self.source.port) == 5986) else 'http'
         return f"{scheme}://{self.source.server_hostname}:{self.source.port}/wsman"
 
     def _create_session(self):
@@ -226,13 +227,160 @@ $result | ConvertTo-Json -Compress
     
     def fetch_certificates(self) -> List[Dict]:
         """
-        Fetch certificates from AD CS using remote WinRM + PowerShell.
+        Fetch issued certificates from AD CS CA database.
+
+        Primary source:
+        - certutil -view -restrict "Disposition=20"
+
+        Fallback source:
+        - Cert:\\LocalMachine\\My store
         """
         try:
             if self.session is None:
                 self.session = self._create_session()
 
-            ps_script = r"""
+            issued = self._fetch_issued_certificates_from_ca()
+            if issued:
+                logger.info(f"Fetched {len(issued)} issued certificates from ADCS CA database")
+                return issued
+
+            logger.warning("CA issued-certificate query returned no data, falling back to local certificate store")
+            return self._fetch_local_machine_certificates()
+        except Exception as e:
+            logger.error(f"Failed to fetch certificates: {str(e)}")
+            return []
+
+    def run_feature_verification(self) -> Dict:
+        """
+        Execute AD CS feature checklist commands remotely and capture outputs.
+        """
+        if self.session is None:
+            self.session = self._create_session()
+
+        checklist_script = r"""
+$ErrorActionPreference = 'Continue'
+$results = [ordered]@{}
+
+function ExecStep($name, $scriptBlock) {
+  try {
+    $output = & $scriptBlock 2>&1 | Out-String
+    $exitCode = $LASTEXITCODE
+    $results[$name] = [ordered]@{
+      success = ($exitCode -eq 0 -or $null -eq $exitCode)
+      exit_code = $exitCode
+      output = $output.Trim()
+    }
+  } catch {
+    $results[$name] = [ordered]@{
+      success = $false
+      exit_code = 1
+      output = $_.Exception.Message
+    }
+  }
+}
+
+ExecStep "ping_ca" { certutil -config - -ping }
+ExecStep "ca_info" { certutil -config - -CAInfo }
+ExecStep "issued_certificates" { certutil -view -restrict "Disposition=20" }
+ExecStep "issued_cert_fields" { certutil -view -restrict "Disposition=20" -out "RequestID,SerialNumber,Subject,NotBefore,NotAfter" }
+ExecStep "local_machine_expiry" { Get-ChildItem Cert:\LocalMachine\My | Select-Object Subject, NotAfter | ConvertTo-Json -Depth 3 }
+ExecStep "local_machine_crypto" { Get-ChildItem Cert:\LocalMachine\My | Select-Object Subject, SignatureAlgorithm, PublicKey | ConvertTo-Json -Depth 4 }
+
+if (Get-Command Get-ADObject -ErrorAction SilentlyContinue) {
+  ExecStep "ldap_pkienrollment" { Get-ADObject -Filter 'objectClass -eq "pKIEnrollmentService"' -Properties * | Select-Object Name, DistinguishedName, whenCreated | ConvertTo-Json -Depth 4 }
+} else {
+  $results["ldap_pkienrollment"] = [ordered]@{
+    success = $false
+    exit_code = 127
+    output = "Get-ADObject command not available"
+  }
+}
+
+$results | ConvertTo-Json -Depth 8
+        """
+        result = self.session.run_ps(checklist_script)
+        stdout = (result.std_out or b'').decode(errors='ignore').strip()
+        stderr = (result.std_err or b'').decode(errors='ignore').strip()
+
+        if result.status_code != 0:
+            return {
+                "success": False,
+                "message": f"Checklist execution failed ({result.status_code})",
+                "stderr": stderr,
+                "stdout": stdout,
+                "checks": {},
+            }
+        try:
+            checks = json.loads(stdout) if stdout else {}
+        except Exception:
+            return {
+                "success": False,
+                "message": "Checklist output parsing failed",
+                "stderr": stderr,
+                "stdout": stdout,
+                "checks": {},
+            }
+        return {
+            "success": True,
+            "message": "Checklist executed",
+            "checks": checks,
+        }
+
+    def _fetch_issued_certificates_from_ca(self) -> List[Dict]:
+        """
+        Query CA issued certificates (Disposition=20) and normalize fields.
+        """
+        script = r"""
+$ErrorActionPreference = 'Stop'
+$raw = certutil -view -restrict "Disposition=20" -out "RequestID,SerialNumber,Subject,NotBefore,NotAfter,RequesterName,CertificateTemplate,CertificateHash,Disposition" csv
+$rows = @()
+if ($raw) {
+  $rows = $raw | ConvertFrom-Csv
+}
+$mapped = @()
+foreach ($row in $rows) {
+  $mapped += [pscustomobject]@{
+    RequestID = $row.RequestID
+    SerialNumber = $row.SerialNumber
+    Subject = $row.Subject
+    NotBefore = $row.NotBefore
+    NotAfter = $row.NotAfter
+    Requester = $row.RequesterName
+    Template = $row.CertificateTemplate
+    Thumbprint = $row.CertificateHash
+    Disposition = $row.Disposition
+  }
+}
+$mapped | ConvertTo-Json -Depth 4
+        """
+        result = self.session.run_ps(script)
+        stdout = (result.std_out or b'').decode(errors='ignore').strip()
+        stderr = (result.std_err or b'').decode(errors='ignore').strip()
+        if result.status_code != 0:
+            logger.warning(f"CA query via certutil failed ({result.status_code}): {stderr or stdout}")
+            return []
+        if not stdout:
+            return []
+        parsed = json.loads(stdout)
+        records = parsed if isinstance(parsed, list) else [parsed]
+        normalized = []
+        for rec in records:
+            normalized.append({
+                "request_id": rec.get("RequestID"),
+                "SerialNumber": rec.get("SerialNumber"),
+                "Subject": rec.get("Subject"),
+                "NotBefore": rec.get("NotBefore"),
+                "NotAfter": rec.get("NotAfter"),
+                "Requester": rec.get("Requester"),
+                "Template": rec.get("Template"),
+                "Thumbprint": (rec.get("Thumbprint") or "").replace(" ", ""),
+                "Disposition": rec.get("Disposition"),
+            })
+        return normalized
+
+    def _fetch_local_machine_certificates(self) -> List[Dict]:
+        """Fallback local cert store collection."""
+        ps_script = r"""
 $certs = Get-ChildItem -Path Cert:\LocalMachine\My -ErrorAction SilentlyContinue | Select-Object \
   Subject,Issuer,Thumbprint,SerialNumber,NotBefore,NotAfter,@{Name='KeyLength';Expression={$_.PublicKey.Key.KeySize}},@{Name='SignatureAlgorithm';Expression={$_.SignatureAlgorithm.FriendlyName}}
 
@@ -241,24 +389,22 @@ if ($certs) {
 } else {
   Write-Output "[]"
 }
-            """
-
-            result = self.session.run_ps(ps_script)
-            stdout = (result.std_out or b'').decode(errors='ignore').strip()
-            stderr = (result.std_err or b'').decode(errors='ignore').strip()
-
-            if result.status_code != 0:
-                logger.warning(f"WinRM certificate fetch failed ({result.status_code}): {stderr or stdout}")
-                return []
-
-            if not stdout:
-                return []
-
-            certificates = json.loads(stdout)
-            return certificates if isinstance(certificates, list) else [certificates]
-        except Exception as e:
-            logger.error(f"Failed to fetch certificates: {str(e)}")
+        """
+        result = self.session.run_ps(ps_script)
+        stdout = (result.std_out or b'').decode(errors='ignore').strip()
+        stderr = (result.std_err or b'').decode(errors='ignore').strip()
+        if result.status_code != 0:
+            logger.warning(f"Local store fallback failed ({result.status_code}): {stderr or stdout}")
             return []
+        if not stdout:
+            return []
+        parsed = json.loads(stdout)
+        certs = parsed if isinstance(parsed, list) else [parsed]
+        for cert in certs:
+            cert["request_id"] = cert.get("request_id") or cert.get("RequestID")
+            cert["Template"] = cert.get("Template") or cert.get("template_name")
+            cert["Requester"] = cert.get("Requester") or ""
+        return certs
     
     def close(self):
         """Close WinRM connection."""
